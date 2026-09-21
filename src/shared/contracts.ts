@@ -1,4 +1,11 @@
 import type {
+  ActivityDayView,
+  FocusPreferences,
+  FocusStartRequest,
+  FocusViewState,
+  GoalDraft
+} from "./focus";
+import type {
   CloudInferenceProvider,
   InferenceProvider,
   InferenceSettings,
@@ -21,6 +28,7 @@ export const IPC_CHANNELS = {
   clearInferenceApiKey: "openhistory:clear-inference-api-key",
   acceptPrivacyNotice: "openhistory:accept-privacy-notice",
   completeInferenceOnboarding: "openhistory:complete-inference-onboarding",
+  completeLocalOnlyOnboarding: "openhistory:complete-local-only-onboarding",
   refreshAppleAvailability: "openhistory:refresh-apple-availability",
   authorizeCloudInference: "openhistory:authorize-cloud-inference",
   requestAccessibility: "openhistory:request-accessibility",
@@ -43,7 +51,19 @@ export const IPC_CHANNELS = {
   dailyRollupState: "openhistory:daily-rollup-state",
   agentAccessState: "openhistory:agent-access-state",
   bootstrapState: "openhistory:bootstrap-state",
-  openSettings: "openhistory:open-settings"
+  openSettings: "openhistory:open-settings",
+  getFocusState: "openhistory:focus-get-state",
+  saveGoal: "openhistory:focus-save-goal",
+  deleteGoal: "openhistory:focus-delete-goal",
+  selectGoal: "openhistory:focus-select-goal",
+  saveFocusPreferences: "openhistory:focus-save-preferences",
+  startFocus: "openhistory:focus-start",
+  stopFocus: "openhistory:focus-stop",
+  snoozeFocus: "openhistory:focus-snooze",
+  resumeFocus: "openhistory:focus-resume",
+  previewFocusReminder: "openhistory:focus-preview-reminder",
+  focusState: "openhistory:focus-state",
+  getActivityDay: "openhistory:get-activity-day"
 } as const;
 
 export interface ApplicationDescriptor {
@@ -195,6 +215,8 @@ export interface CollectionSettings {
   cloudInferenceConsents: CloudInferenceProvider[];
   appearanceMode: "system" | "light" | "dark";
   appPresentationMode: AppPresentationMode;
+  /** Persistent capture pause, honored by the header, tray and every launch. */
+  capturePaused: boolean;
   captureWindowTitles: boolean;
   captureFocusedElements: boolean;
   captureTextInput: boolean;
@@ -282,6 +304,13 @@ export interface BootstrapState {
   accessibilityTrusted: boolean;
   dailyRollup: DailyRollupState;
   agentAccess: AgentAccessState;
+  focus: FocusViewState;
+}
+
+export interface LocalOnlyOnboardingSelection {
+  captureEmailActivity?: boolean;
+  captureMessagingActivity?: boolean;
+  appPresentationMode?: AppPresentationMode;
 }
 
 export interface OpenHistoryBridge {
@@ -293,6 +322,7 @@ export interface OpenHistoryBridge {
   clearInferenceApiKey(provider: InferenceProvider): Promise<BootstrapState>;
   acceptPrivacyNotice(): Promise<BootstrapState>;
   completeInferenceOnboarding(selection: InferenceOnboardingSelection): Promise<BootstrapState>;
+  completeLocalOnlyOnboarding(selection: LocalOnlyOnboardingSelection): Promise<BootstrapState>;
   refreshAppleAvailability(): Promise<BootstrapState>;
   authorizeCloudInference(provider: CloudInferenceProvider): Promise<BootstrapState>;
   requestAccessibilityPermission(): Promise<BootstrapState>;
@@ -316,6 +346,18 @@ export interface OpenHistoryBridge {
   onAgentAccessState(listener: (state: AgentAccessState) => void): () => void;
   onBootstrapState(listener: (state: BootstrapState) => void): () => void;
   onOpenSettings(listener: () => void): () => void;
+  getFocusState(): Promise<FocusViewState>;
+  saveGoal(draft: GoalDraft): Promise<FocusViewState>;
+  deleteGoal(id: string): Promise<FocusViewState>;
+  selectGoal(id: string | null): Promise<FocusViewState>;
+  saveFocusPreferences(preferences: FocusPreferences): Promise<FocusViewState>;
+  startFocus(request: FocusStartRequest): Promise<FocusViewState>;
+  stopFocus(): Promise<FocusViewState>;
+  snoozeFocus(): Promise<FocusViewState>;
+  resumeFocus(): Promise<FocusViewState>;
+  previewFocusReminder(): Promise<FocusViewState>;
+  onFocusState(listener: (state: FocusViewState) => void): () => void;
+  getActivityDay(date: string): Promise<ActivityDayView>;
 }
 
 export interface InferenceOnboardingSelection {

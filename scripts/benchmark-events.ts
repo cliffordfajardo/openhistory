@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { analyzeEventQuality } from "../src/main/event-quality";
 import { loadActivityEvents } from "../src/main/activity-event-file";
 
-const dataDirectory = process.argv[2] || process.env.OPENHISTORY_DATA_DIR || process.env.COMPUTER_HISTORY_DATA_DIR;
+const dataDirectory = process.argv[2] || process.env.OPENHISTORY_FOCUS_DATA_DIR;
 if (!dataDirectory) {
   console.error("Usage: npm run benchmark:events -- /path/to/activity-data");
   process.exitCode = 1;

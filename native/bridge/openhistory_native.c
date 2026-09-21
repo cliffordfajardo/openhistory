@@ -1,6 +1,7 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <node_api.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,8 +16,18 @@ extern int32_t openhistory_collector_start(
     void *context
 );
 extern void openhistory_collector_stop(void);
+extern int32_t openhistory_collector_set_foreground_observation(uint64_t generation);
+extern int32_t openhistory_focus_overlay_show(const char *request_json);
+extern void openhistory_focus_overlay_hide(const char *nudge_id, bool immediate);
+extern void openhistory_focus_overlay_set_action_callback(
+    openhistory_collector_event_callback callback,
+    void *context
+);
+extern void openhistory_focus_overlay_shutdown(void);
 
 static napi_threadsafe_function collector_events = NULL;
+static napi_threadsafe_function focus_actions = NULL;
+static bool cleanup_hook_installed = false;
 
 static napi_value boolean_value(napi_env env, bool value) {
     napi_value result;
@@ -168,6 +179,121 @@ static napi_value stop_collector(napi_env env, napi_callback_info info) {
     return undefined_value(env);
 }
 
+static napi_value set_foreground_observation(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    int64_t generation = -1;
+    if (argument_count != 1 || napi_get_value_int64(env, argument, &generation) != napi_ok ||
+        generation < 0 || generation > 9007199254740991LL) {
+        napi_throw_type_error(env, NULL, "setForegroundObservation requires a nonnegative integer generation");
+        return NULL;
+    }
+    return boolean_value(env, openhistory_collector_set_foreground_observation((uint64_t)generation) == 0);
+}
+
+static void release_focus_actions(void) {
+    openhistory_focus_overlay_set_action_callback(NULL, NULL);
+    if (focus_actions != NULL) {
+        napi_release_threadsafe_function(focus_actions, napi_tsfn_release);
+        focus_actions = NULL;
+    }
+}
+
+static void receive_focus_action(const char *line, void *context) {
+    (void)context;
+    if (line == NULL || focus_actions == NULL) return;
+    char *copy = strdup(line);
+    if (copy == NULL) return;
+    if (napi_call_threadsafe_function(focus_actions, copy, napi_tsfn_nonblocking) != napi_ok) free(copy);
+}
+
+static void cleanup_native_bridge(void *argument) {
+    (void)argument;
+    // Node finalizes thread-safe functions during environment teardown before this hook runs, so
+    // only detach native producers here and forget the handles instead of releasing them again.
+    openhistory_focus_overlay_set_action_callback(NULL, NULL);
+    openhistory_focus_overlay_shutdown();
+    openhistory_collector_stop();
+    focus_actions = NULL;
+    collector_events = NULL;
+}
+
+static napi_value set_focus_overlay_action_handler(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    napi_valuetype type = napi_undefined;
+    if (argument_count >= 1 && napi_typeof(env, argument, &type) != napi_ok) return NULL;
+
+    release_focus_actions();
+    if (type == napi_undefined || type == napi_null) return undefined_value(env);
+    if (type != napi_function) {
+        napi_throw_type_error(env, NULL, "setFocusOverlayActionHandler requires a function or null");
+        return NULL;
+    }
+
+    napi_value resource_name;
+    napi_status status = napi_create_string_utf8(
+        env,
+        "OpenHistory focus overlay actions",
+        NAPI_AUTO_LENGTH,
+        &resource_name
+    );
+    if (status == napi_ok) {
+        status = napi_create_threadsafe_function(
+            env, argument, NULL, resource_name, 64, 1,
+            NULL, NULL, NULL, deliver_collector_event, &focus_actions
+        );
+    }
+    if (status != napi_ok) {
+        focus_actions = NULL;
+        napi_throw_error(env, NULL, "Unable to create the focus overlay action channel");
+        return NULL;
+    }
+    // Reminder actions must never keep the process alive on their own.
+    napi_unref_threadsafe_function(env, focus_actions);
+    openhistory_focus_overlay_set_action_callback(receive_focus_action, NULL);
+    return undefined_value(env);
+}
+
+static napi_value show_focus_overlay(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    if (argument_count != 1) {
+        napi_throw_type_error(env, NULL, "showFocusOverlay requires request JSON");
+        return NULL;
+    }
+    char *request_json = copy_utf8_argument(env, argument, "showFocusOverlay request must be JSON text");
+    if (request_json == NULL) return NULL;
+    int32_t result = openhistory_focus_overlay_show(request_json);
+    free(request_json);
+    napi_value value;
+    if (napi_create_int32(env, result, &value) != napi_ok) return NULL;
+    return value;
+}
+
+static napi_value hide_focus_overlay(napi_env env, napi_callback_info info) {
+    size_t argument_count = 2;
+    napi_value arguments[2];
+    if (napi_get_cb_info(env, info, &argument_count, arguments, NULL, NULL) != napi_ok) return NULL;
+    if (argument_count != 2) {
+        napi_throw_type_error(env, NULL, "hideFocusOverlay requires a reminder identifier and an immediate flag");
+        return NULL;
+    }
+    bool immediate = false;
+    if (napi_get_value_bool(env, arguments[1], &immediate) != napi_ok) {
+        napi_throw_type_error(env, NULL, "hideFocusOverlay immediate flag must be a boolean");
+        return NULL;
+    }
+    char *nudge_id = copy_utf8_argument(env, arguments[0], "hideFocusOverlay reminder identifier must be a string");
+    if (nudge_id == NULL) return NULL;
+    openhistory_focus_overlay_hide(nudge_id, immediate);
+    free(nudge_id);
+    return undefined_value(env);
+}
+
 static napi_value is_trusted(napi_env env, napi_callback_info info) {
     (void)info;
     return boolean_value(env, AXIsProcessTrusted());
@@ -243,6 +369,10 @@ NAPI_MODULE_INIT() {
     napi_property_descriptor properties[] = {
         { "startCollector", NULL, start_collector, NULL, NULL, NULL, napi_default, NULL },
         { "stopCollector", NULL, stop_collector, NULL, NULL, NULL, napi_default, NULL },
+        { "setForegroundObservation", NULL, set_foreground_observation, NULL, NULL, NULL, napi_default, NULL },
+        { "setFocusOverlayActionHandler", NULL, set_focus_overlay_action_handler, NULL, NULL, NULL, napi_default, NULL },
+        { "showFocusOverlay", NULL, show_focus_overlay, NULL, NULL, NULL, napi_default, NULL },
+        { "hideFocusOverlay", NULL, hide_focus_overlay, NULL, NULL, NULL, napi_default, NULL },
         { "isTrusted", NULL, is_trusted, NULL, NULL, NULL, napi_default, NULL },
         { "requestTrust", NULL, request_trust, NULL, NULL, NULL, napi_default, NULL },
         { "processIdentifier", NULL, process_identifier, NULL, NULL, NULL, napi_default, NULL },
@@ -256,6 +386,10 @@ NAPI_MODULE_INIT() {
         properties
     ) != napi_ok) {
         return NULL;
+    }
+    if (!cleanup_hook_installed &&
+        napi_add_env_cleanup_hook(env, cleanup_native_bridge, NULL) == napi_ok) {
+        cleanup_hook_installed = true;
     }
     return exports;
 }

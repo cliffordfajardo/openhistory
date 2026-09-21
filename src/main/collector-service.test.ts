@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { CollectorService, type NativeCollectorBinding } from "./collector-service";
+import { FOREGROUND_EVIDENCE_PREFIX } from "./foreground-evidence";
 import { DEFAULT_COLLECTION_SETTINGS } from "./settings-store";
 
 class FakeNativeCollector implements NativeCollectorBinding {
@@ -12,12 +13,20 @@ class FakeNativeCollector implements NativeCollectorBinding {
   stopCount = 0;
   requestCount = 0;
   trusted = true;
+  observations: number[] = [];
+  onEvent?: (line: string) => void;
+
+  setForegroundObservation(generation: number): boolean {
+    this.observations.push(generation);
+    return true;
+  }
 
   startCollector(
     dataDirectory: string,
     configurationJSON: string,
     onEvent: (line: string) => void
   ): boolean {
+    this.onEvent = onEvent;
     this.starts.push({
       dataDirectory,
       configuration: JSON.parse(configurationJSON) as Record<string, unknown>
@@ -116,6 +125,89 @@ test("refreshes Accessibility state and restarts capture when access changes", a
   assert.equal(collector.accessibilityTrusted, true);
   assert.equal(native.stopCount, 1);
   assert.equal(native.starts.length, 2);
+});
+
+function evidencePacket(generation: number, domain = "video.example"): string {
+  return `${FOREGROUND_EVIDENCE_PREFIX}${JSON.stringify({
+    kind: "browser",
+    generation,
+    sequence: 1,
+    observedAt: Date.now(),
+    processIdentifier: 501,
+    bundleIdentifier: "com.apple.Safari",
+    domain
+  })}`;
+}
+
+test("routes tagged foreground evidence separately from persisted activity", async (context) => {
+  const directory = await testDirectory(context);
+  const native = new FakeNativeCollector();
+  const collector = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native);
+  context.after(() => collector.stop());
+  const events: string[] = [];
+  const evidence: unknown[] = [];
+  collector.on("event", (event) => events.push(event.kind));
+  collector.on("foreground", (packet) => evidence.push(packet));
+  collector.start();
+  collector.setForegroundObservation(4);
+  assert.deepEqual(native.observations, [4]);
+
+  native.onEvent?.(evidencePacket(4));
+  native.onEvent?.(evidencePacket(3));
+  native.onEvent?.(`${FOREGROUND_EVIDENCE_PREFIX}{"kind":"browser"}`);
+
+  assert.equal(evidence.length, 1, "only the current observation generation is forwarded");
+  assert.deepEqual(events, ["collector_started"], "evidence is never treated as an activity event");
+  assert.equal(collector.recentEvents.some((event) => event.kind !== "collector_started"), false);
+});
+
+test("drops evidence from a collector generation that has been restarted", async (context) => {
+  const directory = await testDirectory(context);
+  const native = new FakeNativeCollector();
+  const collector = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native);
+  context.after(() => collector.stop());
+  const resets: number[] = [];
+  const evidence: unknown[] = [];
+  collector.on("foregroundReset", () => resets.push(1));
+  collector.on("foreground", (packet) => evidence.push(packet));
+  collector.setForegroundObservation(2);
+  collector.start();
+  const staleCallback = native.onEvent!;
+  collector.setSettings({ ...DEFAULT_COLLECTION_SETTINGS });
+  staleCallback(evidencePacket(2));
+  assert.equal(evidence.length, 0);
+  assert(resets.length >= 2, "start and restart both reset Focus evidence");
+
+  collector.setEnabled(false);
+  native.onEvent?.(evidencePacket(2));
+  assert.equal(evidence.length, 0, "no evidence is accepted while paused");
+});
+
+test("exposes the native reminder only when the bridge provides it", async (context) => {
+  const directory = await testDirectory(context);
+  const withoutOverlay = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, new FakeNativeCollector());
+  assert.equal(withoutOverlay.focusOverlay(), undefined);
+
+  const requests: string[] = [];
+  const native = Object.assign(new FakeNativeCollector(), {
+    showFocusOverlay: (json: string) => {
+      requests.push(json);
+      return 3;
+    },
+    hideFocusOverlay: () => undefined,
+    setFocusOverlayActionHandler: () => undefined
+  });
+  const overlay = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native).focusOverlay();
+  assert(overlay);
+  assert.equal(overlay.show({
+    nudgeId: "preview-1",
+    sessionId: null,
+    title: "Title",
+    message: "",
+    expectedProcessIdentifier: null,
+    preview: true
+  }), "no_display");
+  assert.equal((JSON.parse(requests[0]!) as { nudgeId: string }).nudgeId, "preview-1");
 });
 
 async function testDirectory(context: TestContext): Promise<string> {

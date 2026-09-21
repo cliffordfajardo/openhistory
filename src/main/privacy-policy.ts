@@ -235,9 +235,12 @@ export class ActivityPrivacyFilter {
   }
 }
 
-function isBrowserEvent(event: Pick<ActivityEvent, "application">): boolean {
+export function isBrowserEvent(event: Pick<ActivityEvent, "application">): boolean {
   const bundleIdentifier = event.application?.bundleIdentifier;
-  return Boolean(bundleIdentifier && BROWSER_BUNDLE_IDENTIFIERS.has(bundleIdentifier));
+  return Boolean(bundleIdentifier && (
+    BROWSER_BUNDLE_IDENTIFIERS.has(bundleIdentifier) ||
+    /^com\.google\.Chrome\.app\.[a-p]{32}$/.test(bundleIdentifier)
+  ));
 }
 
 function browserKey(event: Pick<ActivityEvent, "application">): string | undefined {

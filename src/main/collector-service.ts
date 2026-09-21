@@ -4,6 +4,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { loadActivityEvents, parseRawActivityEvent } from "./activity-event-file";
+import type { FocusOverlayBinding, FocusOverlayShowResult } from "./focus-controller";
+import { isForegroundEvidencePacket, parseForegroundEvidencePacket } from "./foreground-evidence";
 import { ActivityPrivacyFilter } from "./privacy-policy";
 
 const MAX_RECENT_EVENTS = 250;
@@ -32,7 +34,19 @@ export interface NativeCollectorBinding {
   stopCollector(): void;
   isTrusted(): boolean;
   requestTrust(): boolean;
+  setForegroundObservation?(generation: number): boolean;
+  showFocusOverlay?(requestJSON: string): number;
+  hideFocusOverlay?(nudgeId: string, immediate: boolean): void;
+  setFocusOverlayActionHandler?(handler: ((line: string) => void) | null): void;
 }
+
+const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
+  0: "shown",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display",
+  4: "foreground_changed"
+};
 
 export class CollectorService extends EventEmitter {
   state: CollectorState = "stopped";
@@ -44,6 +58,7 @@ export class CollectorService extends EventEmitter {
   private accessibilityTimer?: ReturnType<typeof setInterval>;
   private privacyFilter = new ActivityPrivacyFilter();
   private nativeBinding?: NativeCollectorBinding;
+  private foregroundGeneration = 0;
 
   constructor(
     readonly dataDirectory: string,
@@ -73,6 +88,8 @@ export class CollectorService extends EventEmitter {
       captureMessagingActivity: this.settings.captureMessagingActivity
     });
 
+    this.emit("foregroundReset");
+
     try {
       const native = this.native();
       this.accessibilityTrusted = native.isTrusted();
@@ -91,6 +108,10 @@ export class CollectorService extends EventEmitter {
         name: error instanceof Error ? error.name : "UnknownError"
       });
     }
+  }
+
+  get currentSettings(): CollectionSettings {
+    return this.settings;
   }
 
   setSettings(settings: CollectionSettings): void {
@@ -146,7 +167,46 @@ export class CollectorService extends EventEmitter {
     this.active = false;
     if (nextState === "paused") this.enabled = false;
     this.state = nextState;
+    this.emit("foregroundReset");
     this.emit("state", this.state);
+  }
+
+  /**
+   * Asks the existing native sampler for ephemeral foreground evidence (nonzero generation) or
+   * stops it (zero). The native host keeps the generation across collector restarts.
+   */
+  setForegroundObservation(generation: number): void {
+    this.foregroundGeneration = generation;
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return;
+    }
+    native.setForegroundObservation?.(generation);
+  }
+
+  get foregroundObservationGeneration(): number {
+    return this.foregroundGeneration;
+  }
+
+  /** The in-process reminder surface, or undefined when the native module lacks it. */
+  focusOverlay(): FocusOverlayBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { showFocusOverlay, hideFocusOverlay, setFocusOverlayActionHandler } = native;
+    if (typeof showFocusOverlay !== "function" || typeof hideFocusOverlay !== "function" ||
+        typeof setFocusOverlayActionHandler !== "function") return undefined;
+    return {
+      show: (request) => FOCUS_OVERLAY_RESULTS[showFocusOverlay.call(native, JSON.stringify(request))] ??
+        "invalid_request",
+      hide: (nudgeId, immediate) => hideFocusOverlay.call(native, nudgeId, immediate),
+      setActionHandler: (handler) => setFocusOverlayActionHandler.call(native, handler)
+    };
   }
 
   private restart(): void {
@@ -168,6 +228,14 @@ export class CollectorService extends EventEmitter {
 
   private handleNativeEvent(line: string, generation: number): void {
     if (generation !== this.generation) return;
+    if (isForegroundEvidencePacket(line)) {
+      const evidence = parseForegroundEvidencePacket(line, {
+        captureEmailActivity: this.settings.captureEmailActivity,
+        captureMessagingActivity: this.settings.captureMessagingActivity
+      });
+      if (evidence && evidence.generation === this.foregroundGeneration) this.emit("foreground", evidence);
+      return;
+    }
     const rawEvent = parseRawActivityEvent(line);
     if (!rawEvent) return;
     for (const event of this.privacyFilter.filter([rawEvent])) {

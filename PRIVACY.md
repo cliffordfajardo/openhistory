@@ -2,6 +2,17 @@
 
 Last updated: August 16, 2026
 
+> **OpenHistory Focus differences.** This fork runs as a separate app with its own data folder
+> (`~/Library/Application Support/OpenHistory Focus/activity-data`) and never reads upstream
+> OpenHistory data, keys or consents. By default it records only app switches, window titles and
+> browser addresses; email and messaging stay excluded at first run; summaries start off and setup
+> can finish with **Keep everything local — summaries off**. During a Focus session the existing
+> collector also produces short-lived foreground observations (browser host or "unknown") that are
+> never written to disk. Goals and Focus preferences are stored in the same private folder, are
+> removed by "Delete all local data", and are not sent to models or exposed through MCP. The
+> upstream auto-updater is disabled. See [docs/FOCUS.md](docs/FOCUS.md). Where this note and the
+> policy below differ, this note describes the fork.
+
 OpenHistory is a local-first macOS application. This policy describes the data handled by the open-source app and the choices available to you. A distributor may publish additional terms for downloads or update infrastructure, but those terms must not weaken the in-app controls described here.
 
 ## Activity OpenHistory can collect

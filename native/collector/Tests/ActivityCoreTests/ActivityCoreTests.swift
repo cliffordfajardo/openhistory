@@ -389,6 +389,40 @@ import Testing
     #expect(!SemanticProtectionPolicy.browserApplications.contains("notion.id"))
 }
 
+@Test func chromeInstalledWebAppsRequireExactBundleShapeAndObservedHost() throws {
+    let appID = "abcdefghijklmnopabcdefghijklmnop"
+    let bundle = "com.google.Chrome.app.\(appID)"
+    #expect(SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: bundle))
+    for invalid in [
+        "com.google.Chrome.app.\(String(appID.dropFirst()))",
+        "com.google.Chrome.app.\(appID)a",
+        "com.google.Chrome.app.\(String(appID.dropLast()))q",
+        "com.google.Chrome.app.\(appID.uppercased())",
+        "com.google.Chrome.beta.app.\(appID)",
+        "com.google.Chrome.app.\(appID).extra",
+        "evil.com.google.Chrome.app.\(appID)"
+    ] {
+        #expect(!SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: invalid))
+    }
+
+    let observed = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://youtube.com/watch?v=example", title: nil
+    ))
+    let lookalike = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://youtube.com.evil.example/watch", title: nil
+    ))
+    #expect(observed.domain == "youtube.com")
+    #expect(lookalike.domain == "youtube.com.evil.example")
+    #expect(!SemanticProtectionPolicy.protectsBrowserObservation(observed))
+    let protected = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://pornhub.com/private", title: nil
+    ))
+    #expect(SemanticProtectionPolicy.protectsBrowserObservation(protected))
+    #expect(SemanticProtectionPolicy.browserProtectionDecision(
+        for: .unavailable, wasProtected: true
+    ).suppressCapture)
+}
+
 @Test func semanticEventEncodingRemainsBackwardCompatibleVersionOne() throws {
     let event = ActivityEvent(
         kind: .textInput,

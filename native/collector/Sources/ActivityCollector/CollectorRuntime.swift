@@ -84,6 +84,7 @@ private struct PendingTextEdit {
 private struct BrowserContext {
     let observation: BrowserObservation?
     let isProtected: Bool
+    var state: BrowserProtectionObservation? = nil
 }
 
 final class ApplicationActivityCollector: @unchecked Sendable {
@@ -114,12 +115,22 @@ final class ApplicationActivityCollector: @unchecked Sendable {
     private var protectedBrowserProcessIdentifier: pid_t?
     private var lastSnapshotKey: [String: String] = [:]
     private var lastSnapshotAt: [String: Date] = [:]
+    private var foregroundGeneration: UInt64 = 0
+    private var foregroundSequence: UInt64 = 0
+    var foregroundEvidenceHandler: ((ForegroundEvidence) -> Void)?
+    /// Lets the embedding host exclude clicks on its own reminder surface from pointer capture.
+    var pointerExclusion: ((CGPoint) -> Bool)?
 
-    private let browserApplications = SemanticProtectionPolicy.browserApplications.union([
+    private let additionalURLApplications: Set<String> = [
         "com.figma.Desktop",
         "com.linear",
         "notion.id"
-    ])
+    ]
+
+    private func readsBrowserURL(bundleIdentifier: String) -> Bool {
+        SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: bundleIdentifier) ||
+            additionalURLApplications.contains(bundleIdentifier)
+    }
     init(
         writer: EventWriter,
         configuration: CaptureConfiguration = CaptureConfiguration(
@@ -192,6 +203,21 @@ final class ApplicationActivityCollector: @unchecked Sendable {
         let center = workspace.notificationCenter
         for observer in observers { center.removeObserver(observer) }
         observers.removeAll()
+        foregroundGeneration = 0
+        foregroundEvidenceHandler = nil
+        pointerExclusion = nil
+    }
+
+    /// Starts (nonzero) or stops (zero) ephemeral foreground evidence for a Focus session. A new
+    /// generation immediately re-samples, so a session never inherits an earlier observation.
+    func setForegroundObservation(generation: UInt64) {
+        foregroundGeneration = generation
+        guard generation > 0 else { return }
+        if semanticSampler != nil {
+            sampleSemanticActivity()
+        } else {
+            emitForegroundEvidence(sampledApplication: nil, browserContext: nil)
+        }
     }
 
     private var semanticCaptureEnabled: Bool {
@@ -235,6 +261,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
             self?.flushPendingTextEdit()
             self?.screenAwake = false
             self?.emit(ActivityEvent(kind: .screenSlept))
+            self?.emitForegroundEvidence(sampledApplication: nil, browserContext: nil)
         })
 
         observers.append(center.addObserver(
@@ -256,6 +283,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
             self?.flushPendingTextEdit()
             self?.sessionActive = false
             self?.emit(ActivityEvent(kind: .sessionLocked))
+            self?.emitForegroundEvidence(sampledApplication: nil, browserContext: nil)
         })
 
         observers.append(center.addObserver(
@@ -320,7 +348,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
               CFEqual(currentFocusedElement, element) else { return }
 
         let focusedWindow = accessibility.focusedWindow(processIdentifier: processIdentifier)
-        let isBrowserApplication = application.bundleIdentifier.map(browserApplications.contains) == true
+        let isBrowserApplication = application.bundleIdentifier.map(readsBrowserURL) == true
         let privacyWindowTitle = configuration.windowTitles || isBrowserApplication
             ? focusedWindow.flatMap { accessibility.focusedWindowTitle(window: $0) }
             : nil
@@ -355,9 +383,12 @@ final class ApplicationActivityCollector: @unchecked Sendable {
         let privacyWindowTitle = accessibility.focusedWindowTitle(
             processIdentifier: application.processIdentifier
         )
+        let rawURL = kind == .applicationActivated && application.bundleIdentifier.map(readsBrowserURL) == true
+            ? accessibility.browserAddress(processIdentifier: application.processIdentifier)
+            : nil
         let protectedContext = kind == .applicationActivated && browserContext(
             for: application,
-            rawURL: accessibility.browserAddress(processIdentifier: application.processIdentifier),
+            rawURL: rawURL,
             windowTitle: privacyWindowTitle
         ).isProtected
         let title = configuration.windowTitles && kind == .applicationActivated && !protectedContext
@@ -378,19 +409,23 @@ final class ApplicationActivityCollector: @unchecked Sendable {
               let application = applicationForSemanticSampling(),
               shouldObserve(application) else {
             discardPendingTextEdit()
+            emitForegroundEvidence(sampledApplication: nil, browserContext: nil)
             return
         }
         let descriptor = applicationDescriptor(application)
         let processIdentifier = application.processIdentifier
         accessibilityEventMonitor?.bind(to: processIdentifier)
         let focusedWindow = accessibility.focusedWindow(processIdentifier: processIdentifier)
-        let rawBrowserURL = focusedWindow.flatMap { accessibility.browserAddress(root: $0) }
+        let rawBrowserURL = application.bundleIdentifier.map(readsBrowserURL) == true
+            ? focusedWindow.flatMap { accessibility.browserAddress(root: $0) }
+            : nil
         let privacyWindowTitle = focusedWindow.flatMap { accessibility.focusedWindowTitle(window: $0) }
         let browserContext = browserContext(
             for: application,
             rawURL: rawBrowserURL,
             windowTitle: privacyWindowTitle
         )
+        emitForegroundEvidence(sampledApplication: application, browserContext: browserContext)
         if browserContext.isProtected {
             discardPendingTextEdit()
             return
@@ -512,8 +547,8 @@ final class ApplicationActivityCollector: @unchecked Sendable {
         windowTitle: String?
     ) -> BrowserContext {
         guard let bundleIdentifier = application.bundleIdentifier,
-              browserApplications.contains(bundleIdentifier) else {
-            return BrowserContext(observation: nil, isProtected: false)
+              readsBrowserURL(bundleIdentifier: bundleIdentifier) else {
+            return BrowserContext(observation: nil, isProtected: false, state: nil)
         }
         if SemanticProtectionPolicy.protectsPrivateBrowsingWindow(title: windowTitle) {
             return applyBrowserProtection(
@@ -563,7 +598,54 @@ final class ApplicationActivityCollector: @unchecked Sendable {
         case .leave:
             leaveProtectedBrowserContext()
         }
-        return BrowserContext(observation: observation, isProtected: decision.suppressCapture)
+        return BrowserContext(
+            observation: observation,
+            isProtected: decision.suppressCapture,
+            state: observationState
+        )
+    }
+
+    private func emitForegroundEvidence(
+        sampledApplication: NSRunningApplication?,
+        browserContext: BrowserContext?
+    ) {
+        guard foregroundGeneration > 0, let handler = foregroundEvidenceHandler else { return }
+        let frontmost = workspace.frontmostApplication
+        let bundleIdentifier = frontmost?.bundleIdentifier
+        let sampledIsFrontmost = sampledApplication != nil &&
+            sampledApplication?.processIdentifier == frontmost?.processIdentifier
+        let context = ForegroundEvidenceContext(
+            sessionActive: sessionActive,
+            screenAwake: screenAwake,
+            accessibilityTrusted: AXIsProcessTrusted(),
+            captureBrowserURLs: configuration.browserURLs,
+            frontmostProcessIdentifier: frontmost?.processIdentifier,
+            frontmostBundleIdentifier: bundleIdentifier,
+            frontmostIsTransientOverlay: bundleIdentifier.map {
+                SemanticProtectionPolicy.isTransientSystemOverlay(bundleIdentifier: $0)
+            } ?? false,
+            frontmostIsOwnProcess: frontmost.map {
+                configuration.excludedProcessIdentifiers.contains($0.processIdentifier)
+            } ?? false,
+            frontmostIsObservable: frontmost.map(shouldObserve) ?? false,
+            isRecognizedBrowser: bundleIdentifier.map {
+                SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: $0)
+            } ?? false,
+            browserState: sampledIsFrontmost ? browserContext?.state : nil,
+            browserDomain: sampledIsFrontmost ? browserContext?.observation?.domain : nil
+        )
+        let decision = ForegroundEvidenceClassifier.classify(context)
+        foregroundSequence &+= 1
+        handler(ForegroundEvidence(
+            generation: foregroundGeneration,
+            sequence: foregroundSequence,
+            observedAt: Date(),
+            kind: decision.kind,
+            reason: decision.reason,
+            processIdentifier: frontmost?.processIdentifier,
+            bundleIdentifier: decision.kind == .browser ? bundleIdentifier : nil,
+            domain: decision.domain
+        ))
     }
 
     private func enterProtectedBrowserContext(processIdentifier: pid_t) {
@@ -780,15 +862,17 @@ final class ApplicationActivityCollector: @unchecked Sendable {
 
     private func recordPointerClick(at point: CGPoint) {
         guard sessionActive, screenAwake,
+              pointerExclusion?(point) != true,
               let application = workspace.frontmostApplication,
-              shouldObserve(application),
-              !browserContext(
-                  for: application,
-                  rawURL: accessibility.browserAddress(processIdentifier: application.processIdentifier),
-                  windowTitle: accessibility.focusedWindowTitle(
-                      processIdentifier: application.processIdentifier
-                  )
-              ).isProtected else { return }
+              shouldObserve(application) else { return }
+        let rawURL = application.bundleIdentifier.map(readsBrowserURL) == true
+            ? accessibility.browserAddress(processIdentifier: application.processIdentifier)
+            : nil
+        guard !browserContext(
+            for: application,
+            rawURL: rawURL,
+            windowTitle: accessibility.focusedWindowTitle(processIdentifier: application.processIdentifier)
+        ).isProtected else { return }
         let descriptor = applicationDescriptor(application)
         emit(ActivityEvent(
             kind: .pointerClick,

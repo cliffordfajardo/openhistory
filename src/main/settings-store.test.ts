@@ -12,6 +12,30 @@ test("uses privacy defaults before settings are saved", async (context) => {
   assert.deepEqual(new SettingsStore(directory).load(), DEFAULT_COLLECTION_SETTINGS);
 });
 
+test("defaults to minimal capture: app activation, window titles and browser addresses only", () => {
+  assert.equal(DEFAULT_COLLECTION_SETTINGS.captureWindowTitles, true);
+  assert.equal(DEFAULT_COLLECTION_SETTINGS.captureBrowserURLs, true);
+  for (const key of [
+    "captureFocusedElements",
+    "captureTextInput",
+    "capturePointerClicks",
+    "captureDocumentContext",
+    "captureUISnapshots",
+    "captureEmailActivity",
+    "captureMessagingActivity",
+    "capturePaused"
+  ] as const) {
+    assert.equal(DEFAULT_COLLECTION_SETTINGS[key], false, key);
+  }
+});
+
+test("persists a capture pause across launches", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new SettingsStore(directory);
+  store.save({ ...DEFAULT_COLLECTION_SETTINGS, capturePaused: true });
+  assert.equal(new SettingsStore(directory).load().capturePaused, true);
+});
+
 test("persists normalized collection settings", async (context) => {
   const directory = await testDirectory(context);
   const store = new SettingsStore(directory);
@@ -22,6 +46,7 @@ test("persists normalized collection settings", async (context) => {
     cloudInferenceConsents: ["openai", "openai", "anthropic"],
     appearanceMode: "dark",
     appPresentationMode: "menuBar",
+    capturePaused: false,
     captureWindowTitles: false,
     captureFocusedElements: true,
     captureTextInput: false,
@@ -43,7 +68,7 @@ test("persists normalized collection settings", async (context) => {
   assert.equal(store.load().appPresentationMode, "menuBar");
 });
 
-test("migrates the original two-field settings file with semantic defaults", async (context) => {
+test("migrates the original two-field settings file with minimal fork defaults", async (context) => {
   const directory = await testDirectory(context);
   writeFileSync(resolve(directory, "settings.json"), JSON.stringify({
     version: 1,
@@ -57,9 +82,10 @@ test("migrates the original two-field settings file with semantic defaults", asy
   assert.deepEqual(settings.cloudInferenceConsents, []);
   assert.equal(settings.appearanceMode, "system");
   assert.equal(settings.appPresentationMode, "dock");
-  assert.equal(settings.captureTextInput, true);
-  assert.equal(settings.captureDocumentContext, true);
-  assert.equal(settings.captureUISnapshots, true);
+  assert.equal(settings.capturePaused, false);
+  assert.equal(settings.captureTextInput, false);
+  assert.equal(settings.captureDocumentContext, false);
+  assert.equal(settings.captureUISnapshots, false);
   assert.equal(settings.captureEmailActivity, false);
   assert.equal(settings.captureMessagingActivity, false);
 });

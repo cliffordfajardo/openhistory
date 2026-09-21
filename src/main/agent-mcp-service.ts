@@ -46,7 +46,7 @@ export class AgentMcpService extends EventEmitter {
   ) {
     super();
     this.host = options.host ?? "127.0.0.1";
-    this.requestedPort = options.port ?? 47_831;
+    this.requestedPort = options.port ?? 47_841;
   }
 
   async start(): Promise<AgentAccessState> {
@@ -356,7 +356,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function publicServerError(error: unknown, port: number): string {
   if (isRecord(error) && error.code === "EADDRINUSE") {
-    return `Local MCP port ${port} is already in use. Set OPENHISTORY_MCP_PORT to another unused port.`;
+    return `Local MCP port ${port} is already in use. Set OPENHISTORY_FOCUS_MCP_PORT to another unused port.`;
   }
   return "The local MCP server could not start.";
 }

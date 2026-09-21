@@ -34,7 +34,14 @@ export function sanitizedDiagnostics(
         emailActivity: state.settings.captureEmailActivity,
         messagingActivity: state.settings.captureMessagingActivity
       },
-      excludedApplicationCount: state.settings.excludedBundleIdentifiers.length
+      excludedApplicationCount: state.settings.excludedBundleIdentifiers.length,
+      capturePaused: state.settings.capturePaused === true
+    },
+    focus: {
+      goalCount: state.focus?.goals.length ?? 0,
+      distractingSiteCount: state.focus?.preferences.domains.length ?? 0,
+      sessionActive: state.focus?.session.status === "active",
+      detection: state.focus?.detection ?? "unknown"
     },
     inference: {
       enabled: state.inference.settings.enabled,

@@ -37,6 +37,22 @@ final class AccessibilityReader: @unchecked Sendable {
         )
     }
 
+    /// Focused window bounds in global top-left-origin coordinates, used only to place a Focus
+    /// reminder on the display the person is looking at. Returns nil when geometry is unreadable.
+    func focusedWindowFrame(processIdentifier: pid_t) -> CGRect? {
+        guard let window = focusedWindow(processIdentifier: processIdentifier),
+              let positionValue = copyAttribute(window, attribute: kAXPositionAttribute as CFString),
+              let sizeValue = copyAttribute(window, attribute: kAXSizeAttribute as CFString),
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else { return nil }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(unsafeDowncast(positionValue, to: AXValue.self), .cgPoint, &position),
+              AXValueGetValue(unsafeDowncast(sizeValue, to: AXValue.self), .cgSize, &size),
+              size.width > 0, size.height > 0 else { return nil }
+        return CGRect(origin: position, size: size)
+    }
+
     func focusedWindowTitle(processIdentifier: pid_t) -> String? {
         guard let window = focusedWindow(processIdentifier: processIdentifier) else { return nil }
         return focusedWindowTitle(window: window)

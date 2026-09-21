@@ -1,4 +1,7 @@
-import type { InferenceOnboardingSelection } from "@shared/contracts";
+import type {
+  InferenceOnboardingSelection,
+  LocalOnlyOnboardingSelection
+} from "@shared/contracts";
 import {
   INFERENCE_MODEL_OPTIONS,
   isCloudInferenceProvider,
@@ -44,6 +47,36 @@ export function normalizeInferenceOnboardingSelection(
   if (!apiKey) throw new Error(`${candidate.provider} requires an API key`);
   if (apiKey.length > 10_000) throw new Error("API key is too long");
   return { provider: candidate.provider, model, apiKey, ...captureSelections };
+}
+
+/**
+ * The "Keep everything local" path: completes setup with summaries off, no provider, no key and
+ * no cloud consent. Email and messaging stay excluded unless explicitly selected.
+ */
+export function normalizeLocalOnlyOnboardingSelection(
+  value: unknown
+): Required<LocalOnlyOnboardingSelection> {
+  if (value !== undefined && (value === null || typeof value !== "object" || Array.isArray(value))) {
+    throw new Error("Invalid setup selection");
+  }
+  const candidate = (value ?? {}) as Record<string, unknown>;
+  const allowed = new Set(["captureEmailActivity", "captureMessagingActivity", "appPresentationMode"]);
+  if (Object.keys(candidate).some((key) => !allowed.has(key))) throw new Error("Invalid setup selection");
+  for (const key of ["captureEmailActivity", "captureMessagingActivity"] as const) {
+    if (candidate[key] !== undefined && typeof candidate[key] !== "boolean") {
+      throw new Error("Invalid capture selection");
+    }
+  }
+  if (candidate.appPresentationMode !== undefined &&
+      candidate.appPresentationMode !== "dock" &&
+      candidate.appPresentationMode !== "menuBar") {
+    throw new Error("Invalid app presentation selection");
+  }
+  return {
+    captureEmailActivity: candidate.captureEmailActivity === true,
+    captureMessagingActivity: candidate.captureMessagingActivity === true,
+    appPresentationMode: candidate.appPresentationMode === "menuBar" ? "menuBar" : "dock"
+  };
 }
 
 export function assertInferenceOnboardingAvailability(

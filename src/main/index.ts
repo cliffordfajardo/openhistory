@@ -13,6 +13,7 @@ import {
   type TimelineApplication,
   type TimelineState
 } from "@shared/contracts";
+import type { FocusViewState } from "@shared/focus";
 import {
   INFERENCE_PROVIDERS,
   isCloudInferenceProvider,
@@ -32,6 +33,7 @@ import {
   Menu,
   nativeImage,
   nativeTheme,
+  powerMonitor,
   safeStorage,
   screen,
   shell,
@@ -42,15 +44,18 @@ import { existsSync } from "node:fs";
 import { release } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isValidDateKey, readActivityDay } from "./activity-day";
 import { AgentAccessStore } from "./agent-access-store";
 import { AgentMcpService } from "./agent-mcp-service";
 import { AgentProjectionStore } from "./agent-projection";
 import { ApiKeyStore } from "./api-key-store";
 import { loadApplicationIcon } from "./application-icon";
 import { CollectorService } from "./collector-service";
-import { getRuntimeConfig } from "./config";
+import { APP_IDENTITY, configureAppIdentity, getRuntimeConfig } from "./config";
 import { deleteOwnedDataDirectory, ensureOwnedDataDirectory } from "./data-directory";
 import { sanitizedDiagnostics } from "./diagnostics";
+import { FocusController } from "./focus-controller";
+import { FocusStore } from "./focus-store";
 import { HourCoordinator } from "./hour-coordinator";
 import { HourStore } from "./hour-store";
 import { HistoryChatService } from "./history-chat-service";
@@ -70,7 +75,8 @@ import {
 } from "./menu-bar-position";
 import {
   assertInferenceOnboardingAvailability,
-  normalizeInferenceOnboardingSelection
+  normalizeInferenceOnboardingSelection,
+  normalizeLocalOnlyOnboardingSelection
 } from "./inference-onboarding";
 import { probeAppleFoundationModel } from "./inference-provider";
 import { DailyRollupCoordinator } from "./daily-rollup-coordinator";
@@ -86,9 +92,8 @@ import { SettingsStore } from "./settings-store";
 import { TimelineCoordinator } from "./timeline-coordinator";
 import { TimelineStore } from "./timeline-store";
 import { RecentActivityReader } from "./unsummarized-activity";
-import todesktop from "@todesktop/runtime";
 
-todesktop.init();
+configureAppIdentity();
 
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
@@ -117,6 +122,8 @@ let hour: HourCoordinator;
 let dailyRollup: DailyRollupCoordinator;
 let agentMcp: AgentMcpService;
 let historyChat: HistoryChatService;
+let focus: FocusController | undefined;
+let timelineStateCache: TimelineState | undefined;
 let derivedStateTimer: ReturnType<typeof setInterval> | undefined;
 let automaticHistoryTimer: ReturnType<typeof setInterval> | undefined;
 let initialHistoryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -163,10 +170,10 @@ function createWindow(
   const icon = openHistoryIconPath();
   const menuBarMode = mode === "menuBar";
   const window = new BrowserWindow({
-    width: menuBarMode ? 440 : 480,
-    height: menuBarMode ? 660 : 694,
-    minWidth: menuBarMode ? 440 : 400,
-    minHeight: menuBarMode ? 660 : 560,
+    width: menuBarMode ? 440 : 680,
+    height: menuBarMode ? 660 : 780,
+    minWidth: menuBarMode ? 440 : 460,
+    minHeight: menuBarMode ? 660 : 580,
     show: false,
     ...(menuBarMode ? {
       frame: false,
@@ -362,14 +369,31 @@ function sendBootstrapState(): void {
   mainWindow.webContents.send(IPC_CHANNELS.bootstrapState, bootstrapState());
 }
 
+function setCaptureEnabled(enabled: boolean): void {
+  const current = settingsStore.load();
+  if (current.capturePaused === !enabled) {
+    collector.setEnabled(enabled);
+  } else {
+    const saved = settingsStore.save({ ...current, capturePaused: !enabled });
+    if (enabled) {
+      collector.setSettings(saved);
+      collector.setEnabled(true);
+    } else {
+      collector.setEnabled(false);
+      collector.setSettings(saved);
+    }
+  }
+  focus?.refreshCapability();
+  refreshTray();
+}
+
 function toggleCollectionFromTray(): void {
   const current = settingsStore.load();
   if (!collector.enabled && current.privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION) {
     showMenuBarWindow();
     return;
   }
-  collector.setEnabled(!collector.enabled);
-  refreshTray();
+  setCaptureEnabled(!collector.enabled);
   sendBootstrapState();
 }
 
@@ -390,20 +414,30 @@ function refreshTray(): void {
   const state = trayState();
   tray.setImage(trayImage(state));
   tray.setPressedImage(trayImage(state));
-  tray.setToolTip(`OpenHistory — ${trayStateLabel(state)}`);
+  tray.setToolTip(`${APP_IDENTITY.productName} — ${trayStateLabel(state)}`);
 }
 
 function showTrayContextMenu(): void {
   if (!tray) return;
   const state = trayState();
+  const session = focus?.view().session;
+  const focusItems: Electron.MenuItemConstructorOptions[] = session?.status === "active" ? [
+    { label: `Focusing: ${session.goal.title.slice(0, 40)}`, enabled: false },
+    session.snoozedUntil
+      ? { label: "Resume Reminders", click: () => { focus?.resume(); } }
+      : { label: "Snooze Reminders for 5 Minutes", click: () => { focus?.snooze(); } },
+    { label: "Stop Focus Session", click: () => { focus?.stop(); } },
+    { type: "separator" }
+  ] : [];
   tray.popUpContextMenu(Menu.buildFromTemplate([
     { label: trayStateLabel(state), enabled: false },
     { type: "separator" },
-    { label: mainWindow?.isVisible() ? "Hide OpenHistory" : "Show OpenHistory", click: toggleMenuBarWindow },
+    ...focusItems,
+    { label: mainWindow?.isVisible() ? "Hide OpenHistory Focus" : "Show OpenHistory Focus", click: toggleMenuBarWindow },
     { label: collector.enabled ? "Pause Capture" : "Resume Capture", click: toggleCollectionFromTray },
     { label: "Settings…", click: openSettingsFromTray },
     { type: "separator" },
-    { label: "Quit OpenHistory", role: "quit" }
+    { label: "Quit OpenHistory Focus", role: "quit" }
   ]));
 }
 
@@ -473,17 +507,31 @@ function bootstrapState(): BootstrapState {
       keySources: { ...apiKeySources }
     },
     recentEvents: collector.recentEvents,
-    timeline: timeline.getState(),
+    timeline: timelineState(),
     hour: hour.getState(),
     settings: settingsStore.load(),
     accessibilityTrusted: collector.accessibilityTrusted,
     dailyRollup: dailyRollup.getState(),
-    agentAccess: agentMcp.getState()
+    agentAccess: agentMcp.getState(),
+    focus: focus!.view()
   };
 }
 
-function sendTimelineState(state: TimelineState = timeline.getState()): void {
+function timelineState(force = false): TimelineState {
+  if (force || inferenceSettings.enabled || !timelineStateCache) {
+    timelineStateCache = timeline.getState();
+  }
+  return timelineStateCache;
+}
+
+function sendTimelineState(state: TimelineState = timelineState()): void {
+  timelineStateCache = state;
   mainWindow?.webContents.send(IPC_CHANNELS.timelineState, state);
+}
+
+function sendFocusState(state: FocusViewState): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(IPC_CHANNELS.focusState, state);
 }
 
 function sendHourState(state: HourState = hour.getState()): void {
@@ -522,7 +570,7 @@ function buildHistory(): Promise<void> {
 
 function pendingHistoryCounts(): PendingHistoryCounts {
   return {
-    timeline: timeline.getState().pendingEpisodeCount,
+    timeline: timelineState().pendingEpisodeCount,
     hour: hour.getState().pendingHourCount,
     day: dailyRollup.getState().pendingDayCount
   };
@@ -538,7 +586,7 @@ function scheduleHistoryCatchUp(): void {
 
 function buildHistoryIfNeeded(): void {
   if (!inference.configured) return;
-  const hasPendingWork = timeline.getState().pendingEpisodeCount > 0 ||
+  const hasPendingWork = timelineState().pendingEpisodeCount > 0 ||
     hour.getState().pendingHourCount > 0 || dailyRollup.getState().pendingDayCount > 0;
   if (hasPendingWork) {
     void buildHistory().catch((error: unknown) => {
@@ -588,7 +636,25 @@ async function initialize(): Promise<void> {
   }
   nativeTheme.themeSource = settings.appearanceMode;
   collector = new CollectorService(config.dataDirectory, settings);
-  if (settings.privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION) collector.setEnabled(false);
+  if (settings.privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION || settings.capturePaused) {
+    collector.setEnabled(false);
+  }
+  focus = new FocusController({
+    store: new FocusStore(config.dataDirectory),
+    overlay: collector.focusOverlay(),
+    setForegroundObservation: (generation) => collector.setForegroundObservation(generation),
+    capability: () => ({
+      privacyAccepted: collector.currentSettings.privacyNoticeVersion >= CURRENT_PRIVACY_NOTICE_VERSION,
+      captureEnabled: collector.enabled,
+      collectorAvailable: collector.state === "running" || collector.state === "starting",
+      accessibilityTrusted: collector.accessibilityTrusted,
+      captureBrowserURLs: collector.currentSettings.captureBrowserURLs
+    }),
+    idleSeconds: () => powerMonitor.getSystemIdleTime()
+  });
+  focus.on("state", sendFocusState);
+  collector.on("foreground", (evidence) => focus?.handleEvidence(evidence));
+  collector.on("foregroundReset", () => focus?.resetEvidence());
   inference = new InferenceService({
     settings: inferenceSettings,
     apiKey: activeApiKey(inferenceSettings.provider)
@@ -659,12 +725,12 @@ async function initialize(): Promise<void> {
     }
     return bootstrapState();
   });
-  handleTrustedIpc(IPC_CHANNELS.setCollectionEnabled, (_event, enabled: boolean) => {
+  handleTrustedIpc(IPC_CHANNELS.setCollectionEnabled, (_event, enabled: unknown) => {
+    if (typeof enabled !== "boolean") throw new Error("Invalid capture state");
     if (enabled && settingsStore.load().privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION) {
       throw new Error("Accept the privacy notice before starting activity capture");
     }
-    collector.setEnabled(Boolean(enabled));
-    refreshTray();
+    setCaptureEnabled(enabled);
     return bootstrapState();
   });
   handleTrustedIpc(IPC_CHANNELS.updateCollectionSettings, async (_event, settings: CollectionSettings) => {
@@ -673,10 +739,12 @@ async function initialize(): Promise<void> {
       ...settings,
       privacyNoticeVersion: current.privacyNoticeVersion,
       inferenceOnboardingVersion: current.inferenceOnboardingVersion,
-      cloudInferenceConsents: current.cloudInferenceConsents
+      cloudInferenceConsents: current.cloudInferenceConsents,
+      capturePaused: current.capturePaused
     });
     nativeTheme.themeSource = saved.appearanceMode;
     collector.setSettings(saved);
+    focus?.refreshCapability();
     const presentationModeChanged = current.appPresentationMode !== saved.appPresentationMode;
     const privacyBecameMoreRestrictive =
       (current.captureEmailActivity && !saved.captureEmailActivity) ||
@@ -696,6 +764,7 @@ async function initialize(): Promise<void> {
       if (Object.values(privacyReconciliation).some((count) => count > 0)) {
         console.info("Removed newly protected activity from local history", privacyReconciliation);
       }
+      timelineState(true);
       sendDerivedState();
       buildHistoryIfNeeded();
     }
@@ -750,11 +819,36 @@ async function initialize(): Promise<void> {
     const current = settingsStore.load();
     const saved = settingsStore.save({
       ...current,
-      privacyNoticeVersion: CURRENT_PRIVACY_NOTICE_VERSION
+      privacyNoticeVersion: CURRENT_PRIVACY_NOTICE_VERSION,
+      capturePaused: false
     });
     collector.setSettings(saved);
     collector.setEnabled(true);
+    focus?.refreshCapability();
     return bootstrapState();
+  });
+  handleTrustedIpc(IPC_CHANNELS.completeLocalOnlyOnboarding, async (_event, requested: unknown) => {
+    const current = settingsStore.load();
+    if (current.privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION) {
+      throw new Error("Accept the privacy notice before finishing setup");
+    }
+    const selection = normalizeLocalOnlyOnboardingSelection(requested);
+    if (historyBuildPromise) await historyBuildPromise;
+    inferenceSettings = inferenceSettingsStore.save({ ...inferenceSettings, enabled: false });
+    inference.configure(inferenceSettings, activeApiKey(inferenceSettings.provider));
+    const savedSettings = settingsStore.save({
+      ...current,
+      inferenceOnboardingVersion: CURRENT_INFERENCE_ONBOARDING_VERSION,
+      captureEmailActivity: selection.captureEmailActivity,
+      captureMessagingActivity: selection.captureMessagingActivity,
+      appPresentationMode: selection.appPresentationMode
+    });
+    collector.setSettings(savedSettings);
+    const nextState = bootstrapState();
+    if (current.appPresentationMode !== savedSettings.appPresentationMode) {
+      scheduleAppPresentationMode(savedSettings.appPresentationMode, true);
+    }
+    return nextState;
   });
   handleTrustedIpc(IPC_CHANNELS.completeInferenceOnboarding, async (
     _event,
@@ -847,7 +941,7 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.exportDiagnostics, async () => {
     const result = await dialog.showSaveDialog(mainWindow!, {
       title: "Export privacy-safe diagnostics",
-      defaultPath: join(app.getPath("documents"), "OpenHistory Diagnostics.json"),
+      defaultPath: join(app.getPath("documents"), "OpenHistory Focus Diagnostics.json"),
       filters: [{ name: "JSON", extensions: ["json"] }]
     });
     if (result.canceled || !result.filePath) return false;
@@ -865,9 +959,9 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.deleteAllData, async () => {
     const confirmation = await dialog.showMessageBox(mainWindow!, {
       type: "warning",
-      title: "Delete all OpenHistory data?",
-      message: "Permanently delete your local activity, summaries, settings, keys, and agent connections?",
-      detail: `This cannot be undone. OpenHistory will restart.\n\nData directory:\n${config.dataDirectory}`,
+      title: "Delete all OpenHistory Focus data?",
+      message: "Permanently delete your local activity, goals, Focus preferences, summaries, settings, keys, and agent connections?",
+      detail: `This cannot be undone. OpenHistory Focus will restart.\n\nData directory:\n${config.dataDirectory}`,
       buttons: ["Cancel", "Delete and restart"],
       defaultId: 0,
       cancelId: 0,
@@ -875,6 +969,7 @@ async function initialize(): Promise<void> {
     });
     if (confirmation.response !== 1) return false;
     if (historyBuildPromise) await historyBuildPromise.catch(() => undefined);
+    focus?.shutdown();
     collector.stop();
     await agentMcp.stop();
     if (derivedStateTimer) clearInterval(derivedStateTimer);
@@ -923,13 +1018,37 @@ async function initialize(): Promise<void> {
     }
   });
 
+  handleTrustedIpc(IPC_CHANNELS.getFocusState, () => focus!.view());
+  handleTrustedIpc(IPC_CHANNELS.saveGoal, (_event, draft: unknown) => focus!.saveGoal(draft));
+  handleTrustedIpc(IPC_CHANNELS.deleteGoal, (_event, id: unknown) => focus!.deleteGoal(id));
+  handleTrustedIpc(IPC_CHANNELS.selectGoal, (_event, id: unknown) => focus!.selectGoal(id));
+  handleTrustedIpc(IPC_CHANNELS.saveFocusPreferences, (_event, preferences: unknown) =>
+    focus!.savePreferences(preferences));
+  handleTrustedIpc(IPC_CHANNELS.startFocus, (_event, request: unknown) => focus!.start(request));
+  handleTrustedIpc(IPC_CHANNELS.stopFocus, () => focus!.stop());
+  handleTrustedIpc(IPC_CHANNELS.snoozeFocus, () => focus!.snooze());
+  handleTrustedIpc(IPC_CHANNELS.resumeFocus, () => focus!.resume());
+  handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
+  handleTrustedIpc(IPC_CHANNELS.getActivityDay, (_event, date: unknown) => {
+    if (!isValidDateKey(date)) throw new Error("Invalid date");
+    const current = settingsStore.load();
+    return readActivityDay(config.dataDirectory, date, {
+      captureEmailActivity: current.captureEmailActivity,
+      captureMessagingActivity: current.captureMessagingActivity
+    });
+  });
+
   collector.on("event", (event) => {
     mainWindow?.webContents.send(IPC_CHANNELS.activityEvent, event);
-    if (event.kind === "collector_started") refreshTray();
+    if (event.kind === "collector_started") {
+      refreshTray();
+      focus?.refreshCapability();
+    }
   });
   collector.on("state", (state) => {
     mainWindow?.webContents.send(IPC_CHANNELS.collectorState, state);
     refreshTray();
+    focus?.refreshCapability();
   });
 
   if (appPresentationMode === "menuBar") {
@@ -939,7 +1058,9 @@ async function initialize(): Promise<void> {
   } else {
     createWindow("dock", true);
   }
-  if (settings.privacyNoticeVersion >= CURRENT_PRIVACY_NOTICE_VERSION) collector.start();
+  if (settings.privacyNoticeVersion >= CURRENT_PRIVACY_NOTICE_VERSION && !settings.capturePaused) {
+    collector.start();
+  }
   derivedStateTimer = setInterval(() => {
     if (mainWindow && !mainWindow.isDestroyed()) sendDerivedState();
   }, 60_000);
@@ -1000,6 +1121,7 @@ app.on("before-quit", () => {
   if (catchUpHistoryTimer) clearTimeout(catchUpHistoryTimer);
   if (appPresentationModeTimer) clearTimeout(appPresentationModeTimer);
   if (menuBarBlurTimer) clearTimeout(menuBarBlurTimer);
+  focus?.shutdown();
   collector?.stop();
   void agentMcp?.stop();
 });

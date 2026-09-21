@@ -6,10 +6,10 @@ import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { InferenceSettingsStore } from "./inference-settings-store";
 
-test("defaults to enabled OpenAI inference while honoring environment model defaults", async (context) => {
+test("defaults to summaries off while honoring environment model defaults", async (context) => {
   const directory = await testDirectory(context);
   const settings = new InferenceSettingsStore(directory, { openai: "custom-openai-model" }).load();
-  assert.equal(settings.enabled, true);
+  assert.equal(settings.enabled, false);
   assert.equal(settings.provider, "openai");
   assert.equal(settings.models.openai, "custom-openai-model");
   assert.equal(settings.models.anthropic, "claude-sonnet-5");
