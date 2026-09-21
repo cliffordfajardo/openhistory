@@ -1,5 +1,6 @@
 import type {
   ActivityDayView,
+  FocusExperience,
   FocusPreferences,
   FocusStartRequest,
   FocusViewState,
@@ -62,6 +63,10 @@ export const IPC_CHANNELS = {
   snoozeFocus: "openhistory:focus-snooze",
   resumeFocus: "openhistory:focus-resume",
   previewFocusReminder: "openhistory:focus-preview-reminder",
+  setFocusExperience: "openhistory:focus-set-experience",
+  requestScreenCapture: "openhistory:focus-request-screen-capture",
+  refreshScreenCapture: "openhistory:focus-refresh-screen-capture",
+  openScreenCaptureSettings: "openhistory:focus-open-screen-capture-settings",
   focusState: "openhistory:focus-state",
   getActivityDay: "openhistory:get-activity-day"
 } as const;
@@ -350,12 +355,16 @@ export interface OpenHistoryBridge {
   saveGoal(draft: GoalDraft): Promise<FocusViewState>;
   deleteGoal(id: string): Promise<FocusViewState>;
   selectGoal(id: string | null): Promise<FocusViewState>;
-  saveFocusPreferences(preferences: FocusPreferences): Promise<FocusViewState>;
+  saveFocusPreferences(preferences: Omit<FocusPreferences, "experience">): Promise<FocusViewState>;
   startFocus(request: FocusStartRequest): Promise<FocusViewState>;
   stopFocus(): Promise<FocusViewState>;
   snoozeFocus(): Promise<FocusViewState>;
   resumeFocus(): Promise<FocusViewState>;
   previewFocusReminder(): Promise<FocusViewState>;
+  setFocusExperience(experience: FocusExperience): Promise<FocusViewState>;
+  requestScreenCaptureAccess(): Promise<FocusViewState>;
+  refreshScreenCaptureAccess(): Promise<FocusViewState>;
+  openScreenCaptureSettings(): Promise<void>;
   onFocusState(listener: (state: FocusViewState) => void): () => void;
   getActivityDay(date: string): Promise<ActivityDayView>;
 }

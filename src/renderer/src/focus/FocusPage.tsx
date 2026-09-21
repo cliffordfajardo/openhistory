@@ -5,6 +5,9 @@ import {
   FOCUS_TIMING,
   parseFocusDomain,
   type FocusDetectionState,
+  type FocusEffectFallbackReason,
+  type FocusEffectState,
+  type FocusExperience,
   type FocusForegroundSummary,
   type FocusViewState
 } from "@shared/focus";
@@ -65,6 +68,39 @@ const FOREGROUND_COPY: Record<FocusForegroundSummary, string> = {
   unknown: "The current foreground is uncertain. No reminder will show until the next fresh check."
 };
 
+const EXPERIENCE_COPY: Record<FocusExperience, { label: string; detail: string }> = {
+  amber: {
+    label: "Amber edge",
+    detail: "A soft amber glow around the display with the distracting window. No extra permission."
+  },
+  grayscale_screen: {
+    label: "Grayscale screen",
+    detail: "The entire display with the distracting window turns gray while the reminder shows. Other displays stay in color. Needs Screen Recording."
+  }
+};
+
+const FALLBACK_COPY: Record<FocusEffectFallbackReason, string> = {
+  permission_needed: "Screen Recording isn’t allowed",
+  unsupported: "this build or Mac can’t capture the screen",
+  capture_failed: "screen capture stopped or couldn’t start",
+  no_frame: "no screen image arrived in time",
+  display_unavailable: "the display changed or couldn’t be found"
+};
+
+function effectStatusCopy(effect: FocusEffectState): string | undefined {
+  const subject = effect.preview ? "preview" : "reminder";
+  if (effect.status === "fallback") {
+    const reason = FALLBACK_COPY[effect.fallbackReason ?? "capture_failed"];
+    return effect.visible
+      ? `Grayscale didn’t start (${reason}), so this ${subject} uses the amber edge.`
+      : `The last grayscale ${subject} used the amber edge instead: ${reason}.`;
+  }
+  if (!effect.visible || effect.requested !== "grayscale_screen") return undefined;
+  return effect.status === "preparing"
+    ? `Starting grayscale for this ${subject}…`
+    : `Grayscale is showing for this ${subject}.`;
+}
+
 export function FocusPage({
   onManageGoals,
   onOpenSettings,
@@ -88,6 +124,7 @@ export function FocusPage({
         ? <ActiveSessionCard focus={focus} setState={setState} />
         : <StartSessionCard focus={focus} onManageGoals={onManageGoals} setState={setState} />}
       <DistractingSitesCard focus={focus} setState={setState} />
+      <ReminderStyleCard focus={focus} setState={setState} />
       <DetectionCard focus={focus} onOpenSettings={onOpenSettings} setState={setState} state={state} />
     </section>
   );
@@ -141,8 +178,7 @@ function StartSessionCard({
 
   async function preview(): Promise<void> {
     setPreviewMessage(undefined);
-    const failure = await focusAction(setState, () => window.openHistory.previewFocusReminder());
-    setPreviewMessage(failure ?? "Preview shown on this display for about 8 seconds.");
+    setPreviewMessage(await previewReminder(setState));
   }
 
   if (focus.goals.length === 0) {
@@ -255,7 +291,7 @@ function StartSessionCard({
       </div>
       {previewMessage ? <p className="focus-quiet" role="status">{previewMessage}</p> : null}
       <p className="focus-honest-note">
-        Focus is a gentle nudge, not a blocker. When a listed site is in front, a soft amber edge and a short reminder appear. Every site stays reachable.
+        Focus is a gentle nudge, not a blocker. When a listed site is in front, a short reminder appears with your chosen style. Every site stays reachable.
       </p>
     </form>
   );
@@ -286,8 +322,7 @@ function ActiveSessionCard({
 
   async function preview(): Promise<void> {
     setPreviewMessage(undefined);
-    const failure = await focusAction(setState, () => window.openHistory.previewFocusReminder());
-    setPreviewMessage(failure ?? "Preview shown on this display for about 8 seconds.");
+    setPreviewMessage(await previewReminder(setState));
   }
 
   return (
@@ -340,6 +375,118 @@ function ActiveSessionCard({
   );
 }
 
+async function previewReminder(setState: SetAppState): Promise<string> {
+  let requested: FocusExperience = "amber";
+  const failure = await focusAction(setState, async () => {
+    const next = await window.openHistory.previewFocusReminder();
+    requested = next.effect?.requested ?? "amber";
+    return next;
+  });
+  if (failure) return failure;
+  return requested === "amber"
+    ? "Preview shown on this display for about 8 seconds."
+    : "Preview card shown on this display for about 8 seconds. Grayscale status is under Reminder style.";
+}
+
+function ReminderStyleCard({
+  focus,
+  setState
+}: {
+  focus: FocusViewState;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const [error, setError] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const experience = focus.preferences.experience;
+  const access = focus.screenCapture.access;
+  const effectCopy = focus.effect ? effectStatusCopy(focus.effect) : undefined;
+
+  async function choose(next: FocusExperience): Promise<void> {
+    if (next === experience || saving) return;
+    setSaving(true);
+    setError(await focusAction(setState, () => window.openHistory.setFocusExperience(next)));
+    setSaving(false);
+  }
+
+  async function run(action: () => Promise<FocusViewState>): Promise<void> {
+    setError(await focusAction(setState, action));
+  }
+
+  async function openSettings(): Promise<void> {
+    setError(undefined);
+    try {
+      await window.openHistory.openScreenCaptureSettings();
+    } catch (caught) {
+      setError(readableError(caught));
+    }
+  }
+
+  return (
+    <div className="card focus-style">
+      <div className="focus-card-heading">
+        <div>
+          <strong>Reminder style</strong>
+          <span>Both styles show the same reminder card with Snooze and Dismiss. Changes apply right away, even during a session.</span>
+        </div>
+      </div>
+      <div className="focus-style-options" role="radiogroup" aria-label="Reminder style">
+        {(Object.keys(EXPERIENCE_COPY) as FocusExperience[]).map((option) => (
+          <button
+            aria-checked={experience === option}
+            className={experience === option ? "focus-style-option active" : "focus-style-option"}
+            disabled={saving}
+            key={option}
+            onClick={() => void choose(option)}
+            role="radio"
+            type="button"
+          >
+            <strong>{EXPERIENCE_COPY[option].label}</strong>
+            <span>{EXPERIENCE_COPY[option].detail}</span>
+          </button>
+        ))}
+      </div>
+      {experience === "grayscale_screen" ? (
+        <div className="focus-style-permission">
+          <div className="status-line">
+            <span className={`status-light ${access === "granted" ? "running" : "failed"}`} />
+            {access === "granted"
+              ? "Screen Recording allowed"
+              : access === "not_granted"
+                ? "Screen Recording not allowed — reminders use the amber edge"
+                : "Grayscale isn’t available in this build — reminders use the amber edge"}
+          </div>
+          {access === "not_granted" ? (
+            <>
+              <p className="focus-quiet">
+                {focus.screenCapture.requested
+                  ? "Turn on OpenHistory Focus in System Settings → Privacy & Security → Screen & System Audio Recording. macOS may ask you to quit and reopen the app, then choose Check again."
+                  : "macOS asks once. If you allow it, macOS may ask you to quit and reopen the app."}
+              </p>
+              <div className="focus-actions">
+                {focus.screenCapture.requested ? (
+                  <button className="secondary-button" onClick={() => void openSettings()} type="button">Open Settings</button>
+                ) : (
+                  <button className="secondary-button" onClick={() => void run(() => window.openHistory.requestScreenCaptureAccess())} type="button">
+                    Grant Screen Recording
+                  </button>
+                )}
+                <button className="secondary-button" onClick={() => void run(() => window.openHistory.refreshScreenCaptureAccess())} type="button">
+                  Check again
+                </button>
+              </div>
+            </>
+          ) : null}
+          <p className="focus-quiet">
+            Grayscale uses a live screen capture while the reminder is visible. Images stay on your Mac and are never saved or uploaded. The reminder card stays in color, and macOS shows a screen-recording indicator.
+          </p>
+        </div>
+      ) : null}
+      {effectCopy ? <p className="focus-foreground" aria-live="polite">{effectCopy}</p> : null}
+      {error ? <InlineError>{error}</InlineError> : null}
+    </div>
+  );
+}
+
 function DistractingSitesCard({
   focus,
   setState
@@ -357,7 +504,7 @@ function DistractingSitesCard({
     setSaving(true);
     try {
       const next = await window.openHistory.saveFocusPreferences({
-        ...focus.preferences,
+        durationMinutes: focus.preferences.durationMinutes,
         domains: nextDomains
       });
       setState((current) => current ? { ...current, focus: next } : current);

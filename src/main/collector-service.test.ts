@@ -205,9 +205,55 @@ test("exposes the native reminder only when the bridge provides it", async (cont
     title: "Title",
     message: "",
     expectedProcessIdentifier: null,
-    preview: true
+    preview: true,
+    experience: "amber"
   }), "no_display");
   assert.equal((JSON.parse(requests[0]!) as { nudgeId: string }).nudgeId, "preview-1");
+});
+
+test("exposes Screen Recording access only when the bridge supports grayscale", async (context) => {
+  const directory = await testDirectory(context);
+  const overlayFunctions = {
+    showFocusOverlay: () => 5,
+    hideFocusOverlay: () => undefined,
+    setFocusOverlayActionHandler: () => undefined
+  };
+  const withoutCapture = new CollectorService(
+    directory,
+    DEFAULT_COLLECTION_SETTINGS,
+    Object.assign(new FakeNativeCollector(), overlayFunctions)
+  );
+  assert.equal(withoutCapture.focusScreenCapture(), undefined, "an older bridge would ignore grayscale requests");
+  const withoutOverlay = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, Object.assign(new FakeNativeCollector(), {
+    screenCaptureAccess: () => true,
+    requestScreenCaptureAccess: () => true
+  }));
+  assert.equal(withoutOverlay.focusScreenCapture(), undefined);
+
+  let requests = 0;
+  const native = Object.assign(new FakeNativeCollector(), overlayFunctions, {
+    screenCaptureAccess: () => false,
+    requestScreenCaptureAccess: () => {
+      requests += 1;
+      return false;
+    }
+  });
+  const service = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native);
+  const capture = service.focusScreenCapture();
+  assert(capture);
+  assert.equal(capture.access(), false);
+  assert.equal(requests, 0, "checking access never prompts");
+  assert.equal(capture.request(), false);
+  assert.equal(requests, 1);
+  assert.equal(service.focusOverlay()?.show({
+    nudgeId: "preview-2",
+    sessionId: null,
+    title: "Title",
+    message: "",
+    expectedProcessIdentifier: null,
+    preview: true,
+    experience: "grayscale_screen"
+  }), "shown_fallback_permission");
 });
 
 async function testDirectory(context: TestContext): Promise<string> {

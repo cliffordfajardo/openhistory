@@ -82,5 +82,7 @@ test("diagnostics omit activity content, local paths, errors, and credentials", 
   assert.match(output, /"contentIncluded":false/);
   assert.match(output, /"goalCount":1/);
   assert.match(output, /"distractingSiteCount":1/);
+  assert.match(output, /"reminderStyle":"amber"/);
+  assert.match(output, /"screenCaptureAccess":"unsupported"/);
   assert.match(output, /"timelineCount":1/);
 });

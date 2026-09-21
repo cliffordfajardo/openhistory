@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ForegroundEvidence } from "./foreground-evidence";
 import {
+  effectView,
   foregroundSummary,
   initialFocusState,
   reduceFocus,
@@ -434,4 +435,124 @@ test("a duplicate native hidden callback cannot invalidate a newer observation",
   harness.browser(T0 + 1_200);
   harness.send({ ...hidden, now: T0 + 1_300 });
   assert.equal(shows(harness.send({ type: "tick", now: T0 + 3_000 })).length, 1);
+});
+
+function grayscaleHarness(access: "granted" | "not_granted" | "unsupported" = "granted"): Harness {
+  const harness = new Harness();
+  harness.state = initialFocusState(READY, "grayscale_screen", access);
+  return harness;
+}
+
+test("amber reminders ask for the amber style and report it showing at once", () => {
+  const harness = new Harness();
+  harness.start();
+  const [show] = shows(harness.browser(T0 + 1_000));
+  assert.equal(show?.request.experience, "amber");
+  assert.equal(effectView(harness.state)?.status, "showing");
+  assert.equal(effectView(harness.state)?.requested, "amber");
+});
+
+test("grayscale stays preparing until the native side reports the reminder's first frame", () => {
+  const harness = grayscaleHarness();
+  harness.start();
+  const [show] = shows(harness.browser(T0 + 1_000));
+  assert.equal(show?.request.experience, "grayscale_screen");
+  assert.equal(effectView(harness.state)?.status, "preparing");
+  const nudgeId = show!.request.nudgeId;
+
+  harness.send({ type: "effect_status", now: T0 + 1_100, nudgeId: "nudge-other", status: "active" });
+  assert.equal(effectView(harness.state)?.status, "preparing", "another reminder's frame proves nothing");
+  harness.send({ type: "effect_status", now: T0 + 1_200, nudgeId, status: "active" });
+  assert.equal(effectView(harness.state)?.status, "showing");
+  harness.send({ type: "effect_status", now: T0 + 1_300, nudgeId, status: "fallback", reason: "permission_needed" });
+  assert.deepEqual(
+    [effectView(harness.state)?.status, effectView(harness.state)?.fallbackReason],
+    ["fallback", "permission_needed"],
+    "revocation while showing falls back"
+  );
+  harness.send({ type: "effect_status", now: T0 + 1_400, nudgeId, status: "active" });
+  assert.equal(effectView(harness.state)?.status, "fallback", "a fallback is never undone");
+});
+
+test("late native reports for a hidden reminder can't claim grayscale is showing", () => {
+  const harness = grayscaleHarness();
+  harness.start();
+  const nudgeId = shows(harness.browser(T0 + 1_000))[0]!.request.nudgeId;
+  assert.equal(hides(harness.unknown(T0 + 1_500)).length, 1);
+  assert.equal(effectView(harness.state)?.visible, false);
+  harness.send({ type: "effect_status", now: T0 + 1_600, nudgeId, status: "active" });
+  harness.send({ type: "effect_status", now: T0 + 1_700, nudgeId, status: "fallback", reason: "no_frame" });
+  assert.deepEqual(
+    [effectView(harness.state)?.status, effectView(harness.state)?.visible],
+    ["preparing", false]
+  );
+});
+
+test("without Screen Recording, grayscale reminders fall back to amber and say why", () => {
+  for (const [access, reason] of [["not_granted", "permission_needed"], ["unsupported", "unsupported"]] as const) {
+    const harness = grayscaleHarness(access);
+    harness.start();
+    const [show] = shows(harness.browser(T0 + 1_000));
+    assert.equal(show?.request.experience, "amber");
+    assert.deepEqual(
+      [effectView(harness.state)?.status, effectView(harness.state)?.fallbackReason],
+      ["fallback", reason]
+    );
+  }
+});
+
+test("changing the style replaces a visible reminder at once and keeps the session", () => {
+  const harness = new Harness();
+  harness.state = { ...harness.state, screenCapture: "granted" };
+  harness.start();
+  const first = shows(harness.browser(T0 + 1_000))[0]!;
+  const session = harness.state.session;
+  const effects = harness.send({ type: "experience_changed", now: T0 + 1_200, experience: "grayscale_screen" });
+  assert.deepEqual(hides(effects), [{ type: "hide", nudgeId: first.request.nudgeId, immediate: true }]);
+  const [replacement] = shows(effects);
+  assert.equal(replacement?.request.experience, "grayscale_screen", "the 2 s cooldown doesn't delay the switch");
+  assert.notEqual(replacement?.request.nudgeId, first.request.nudgeId);
+  assert.deepEqual(harness.state.session, session);
+});
+
+test("changing the style while snoozed hides nothing new and keeps the snooze", () => {
+  const harness = new Harness();
+  harness.start();
+  harness.browser(T0 + 1_000);
+  harness.send({ type: "snooze", now: T0 + 1_100 });
+  const snoozed = harness.state.session;
+  const effects = harness.send({ type: "experience_changed", now: T0 + 1_200, experience: "grayscale_screen" });
+  assert.equal(shows(effects).length, 0);
+  assert.equal(shows(harness.browser(T0 + 1_500)).length, 0);
+  assert.deepEqual(harness.state.session, snoozed);
+});
+
+test("a grayscale preview expires after 8 s and ignores its late first frame", () => {
+  const harness = grayscaleHarness();
+  const [show] = shows(harness.send({
+    type: "preview",
+    now: T0,
+    previewId: "preview-1",
+    copy: { title: "x", message: "" }
+  }));
+  assert.equal(show?.request.experience, "grayscale_screen");
+  assert.equal(effectView(harness.state)?.status, "preparing");
+  assert.deepEqual(
+    hides(harness.send({ type: "tick", now: T0 + FOCUS_TIMING.previewDurationMs })),
+    [{ type: "hide", nudgeId: "preview-1", immediate: false }]
+  );
+  harness.send({ type: "effect_status", now: T0 + FOCUS_TIMING.previewDurationMs + 10, nudgeId: "preview-1", status: "active" });
+  assert.deepEqual(
+    [effectView(harness.state)?.status, effectView(harness.state)?.visible],
+    ["preparing", false]
+  );
+});
+
+test("changing the style ends a visible preview", () => {
+  const harness = grayscaleHarness();
+  harness.send({ type: "preview", now: T0, previewId: "preview-1", copy: { title: "x", message: "" } });
+  const effects = harness.send({ type: "experience_changed", now: T0 + 100, experience: "amber" });
+  assert.deepEqual(hides(effects), [{ type: "hide", nudgeId: "preview-1", immediate: true }]);
+  assert.equal(harness.state.preview, undefined);
+  assert.equal(effectView(harness.state)?.visible, false);
 });

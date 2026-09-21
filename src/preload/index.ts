@@ -110,6 +110,10 @@ const bridge: OpenHistoryBridge = {
   snoozeFocus: () => ipcRenderer.invoke(IPC_CHANNELS.snoozeFocus),
   resumeFocus: () => ipcRenderer.invoke(IPC_CHANNELS.resumeFocus),
   previewFocusReminder: () => ipcRenderer.invoke(IPC_CHANNELS.previewFocusReminder),
+  setFocusExperience: (experience) => ipcRenderer.invoke(IPC_CHANNELS.setFocusExperience, experience),
+  requestScreenCaptureAccess: () => ipcRenderer.invoke(IPC_CHANNELS.requestScreenCapture),
+  refreshScreenCaptureAccess: () => ipcRenderer.invoke(IPC_CHANNELS.refreshScreenCapture),
+  openScreenCaptureSettings: () => ipcRenderer.invoke(IPC_CHANNELS.openScreenCaptureSettings),
   onFocusState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: FocusViewState): void => {
       listener(state);

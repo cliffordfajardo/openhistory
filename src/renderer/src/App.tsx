@@ -1296,7 +1296,7 @@ function PrivacyOnboarding({ onAccept }: { onAccept: () => Promise<void> }): Rea
       <div>
         <span className="eyebrow">Before capture begins</span>
         <h2 id="privacy-onboarding-title">Your work history stays under your control.</h2>
-        <p>OpenHistory Focus observes which app is in front, its window title, and the front browser tab’s address.<br />It never takes screenshots or tracks your camera or microphone.</p>
+        <p>OpenHistory Focus observes which app is in front, its window title, and the front browser tab’s address.<br />Activity capture never takes screenshots or tracks your camera or microphone. The optional grayscale reminder, off by default, reads the screen only while it shows and never saves it.</p>
       </div>
       <ul>
         <li><strong>Stored locally.</strong> Activity, goals and any summaries live in a private data folder on this Mac, separate from upstream OpenHistory.</li>

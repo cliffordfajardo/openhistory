@@ -1,4 +1,4 @@
-import { FOCUS_LIMITS, type FocusPreferences, type Goal, type GoalDraft } from "@shared/focus";
+import { FOCUS_LIMITS, type FocusExperience, type FocusPreferences, type Goal, type GoalDraft } from "@shared/focus";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
@@ -7,7 +7,8 @@ import { writePrivateFile } from "./private-storage";
 
 export const DEFAULT_FOCUS_PREFERENCES: FocusPreferences = {
   domains: [],
-  durationMinutes: 25
+  durationMinutes: 25,
+  experience: "amber"
 };
 
 const MAX_FOCUS_FILE_BYTES = 512 * 1_024;
@@ -96,6 +97,10 @@ export class FocusStore {
 
   savePreferences(preferences: FocusPreferences): FocusDocument {
     return this.write({ ...this.document, preferences });
+  }
+
+  setExperience(experience: FocusExperience): FocusDocument {
+    return this.write({ ...this.document, preferences: { ...this.document.preferences, experience } });
   }
 
   private write(next: FocusDocument): FocusDocument {

@@ -4,7 +4,11 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { loadActivityEvents, parseRawActivityEvent } from "./activity-event-file";
-import type { FocusOverlayBinding, FocusOverlayShowResult } from "./focus-controller";
+import type {
+  FocusOverlayBinding,
+  FocusOverlayShowResult,
+  FocusScreenCaptureBinding
+} from "./focus-controller";
 import { isForegroundEvidencePacket, parseForegroundEvidencePacket } from "./foreground-evidence";
 import { ActivityPrivacyFilter } from "./privacy-policy";
 
@@ -38,6 +42,8 @@ export interface NativeCollectorBinding {
   showFocusOverlay?(requestJSON: string): number;
   hideFocusOverlay?(nudgeId: string, immediate: boolean): void;
   setFocusOverlayActionHandler?(handler: ((line: string) => void) | null): void;
+  screenCaptureAccess?(): boolean;
+  requestScreenCaptureAccess?(): boolean;
 }
 
 const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
@@ -45,7 +51,9 @@ const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
   1: "invalid_request",
   2: "not_main_thread",
   3: "no_display",
-  4: "foreground_changed"
+  4: "foreground_changed",
+  5: "shown_fallback_permission",
+  6: "shown_fallback_unavailable"
 };
 
 export class CollectorService extends EventEmitter {
@@ -206,6 +214,23 @@ export class CollectorService extends EventEmitter {
         "invalid_request",
       hide: (nudgeId, immediate) => hideFocusOverlay.call(native, nudgeId, immediate),
       setActionHandler: (handler) => setFocusOverlayActionHandler.call(native, handler)
+    };
+  }
+
+  /**
+   * Screen Recording access for the grayscale reminder, or undefined when the native module
+   * predates it (its overlay would ignore a grayscale request).
+   */
+  focusScreenCapture(): FocusScreenCaptureBinding | undefined {
+    if (!this.focusOverlay()) return undefined;
+    const native = this.native();
+    const { screenCaptureAccess, requestScreenCaptureAccess } = native;
+    if (typeof screenCaptureAccess !== "function" || typeof requestScreenCaptureAccess !== "function") {
+      return undefined;
+    }
+    return {
+      access: () => screenCaptureAccess.call(native) === true,
+      request: () => requestScreenCaptureAccess.call(native) === true
     };
   }
 

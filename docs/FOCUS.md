@@ -8,7 +8,8 @@ adds a calm focus companion on top of OpenHistory's private, local activity coll
   minutes, and list the sites that tend to pull you away.
 - **A gentle reminder**: during a session, if a listed site is the front browser tab, a thin warm
   amber edge fades in around that display with a small reminder card near the top: your goal and
-  intention, plus **Snooze 5 min** and **Dismiss**.
+  intention, plus **Snooze 5 min** and **Dismiss**. Optionally, the **Grayscale screen** style
+  shows that whole display in gray instead of the amber edge (see [Reminder styles](#reminder-styles)).
 - **An Activity timeline**: a model-free, chronological view of each recorded day.
 
 Focus **nudges; it never blocks**. Every site stays reachable, and nothing is closed, hidden or
@@ -119,12 +120,45 @@ Focus treats every uncertain state as "unknown" and does not remind:
 Private-window detection is heuristic and depends on the browser’s exposed accessibility
 information. It is not a universal guarantee across browser versions or languages.
 
+## Reminder styles
+
+Choose a style under **Focus → Reminder style**. It is saved in `focus.json` and applies
+immediately, including to a running session: a visible reminder is replaced in the new style,
+while the session's goal, timer, site list, snooze and dismiss quiet period are kept.
+
+- **Amber edge** (default, and the style for files saved before styles existed): the warm edge
+  described above. It needs no permission beyond Accessibility.
+- **Grayscale screen**: while a reminder or preview is showing, the **entire display** that holds
+  the distracting window (for a preview, the display with the Focus window) is shown in grayscale.
+  Other displays stay in color. The reminder card, Snooze and Dismiss are the same; the card and
+  any OpenHistory Focus panels stay in color above the gray image. It needs macOS Screen
+  Recording access.
+
+How grayscale works: `FocusGrayscale.swift` captures that display with ScreenCaptureKit at up to
+30 fps (the real cursor stays visible; the captured one is off), desaturates each complete frame
+with Core Image on the GPU and draws it into a Metal layer in a click-through, nonactivating panel
+just below the card. The capture filter excludes this app's own overlay panels (by excluding the
+app and listing its visible normal windows as exceptions, so the Focus window still appears under
+the gray image). The panel appears only after the first captured frame is rendered; before that,
+the Focus page says "Starting grayscale" rather than claiming it is shown. No system display
+setting, private API or Shortcut is used, and nothing changes after the app quits or crashes.
+
+When grayscale can't run, the reminder shows the amber edge instead and the Focus page says why:
+Screen Recording not allowed, capture unsupported, capture stopped (including revoking access
+while it runs), no frame within 4 s, or the display changed. Hiding a reminder removes the gray
+panel synchronously and then stops capture, so a late capture callback can't bring it back.
+
 ## Permissions
 
-- **Accessibility** is the only permission Focus uses. It already powers OpenHistory's collector.
-- No Screen Recording permission: the reminder picks its display from the front window's
-  Accessibility geometry, falling back to on-screen window bounds for that process (bounds are
-  available without Screen Recording).
+- **Accessibility** powers OpenHistory's collector and every reminder.
+- **Screen Recording** is used only by the optional Grayscale screen style. The amber style needs
+  no Screen Recording: it picks its display from the front window's Accessibility geometry,
+  falling back to on-screen window bounds for that process (bounds are available without Screen
+  Recording). Access is checked without prompting. **Grant Screen Recording** asks macOS once per
+  launch; afterwards the page offers **Open Settings** and **Check again**. macOS may ask you to
+  quit and reopen the app after granting. No capture starts unless access is already granted.
+  While grayscale runs, macOS shows its screen-recording indicator; newer macOS versions may also
+  ask periodically whether to keep allowing it.
 - No AppleScript/Automation, no browser extension, and no second activity tracker.
 
 ## Privacy
@@ -152,6 +186,9 @@ information. It is not a universal guarantee across browser versions or language
   `OPENHISTORY_FOCUS_TODESKTOP_ID`.
 - **Delete everything.** Settings → Data & privacy → Delete all local data removes activity, goals,
   preferences, summaries, settings, keys and agent connections after a native confirmation.
+- **Grayscale frames are transient.** They exist only in ScreenCaptureKit/GPU memory while a
+  grayscale reminder shows. They are never written to disk, logged, copied to JavaScript,
+  analyzed or sent anywhere, and the capture stream and panel are released when it hides.
 - **Diagnostics** include counts and states only (number of goals and sites, whether a session is
   active), never goal text or site names.
 
@@ -195,7 +232,13 @@ CollectorService (Node): validate + privacy ──► FocusController ◄── 
 
 Data shapes (`src/shared/focus.ts`):
 
-- `Goal { id, title, why, currentFocus }`, `FocusPreferences { domains, durationMinutes }`.
+- `Goal { id, title, why, currentFocus }`,
+  `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_screen" }`.
+  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`.
+- The view also reports `screenCapture { access, requested }` separately from browser detection,
+  and `effect { requested, status: preparing | showing | fallback, fallbackReason, visible }` for
+  the latest reminder or preview. Native effect reports carry the nudge ID and are ignored unless
+  that reminder is still visible.
 - `FocusSession` is `idle` or `active { id, goal snapshot, intention, domains, startedAt, endsAt,
   snoozedUntil }`, kept in memory only.
 - Foreground evidence is `browser { generation, sequence, observedAt, processIdentifier,
@@ -265,6 +308,11 @@ gap labels, truncation limits, path traversal and symlinked files.
   verified configurations should be claimed.
 - The shared-suffix list that blocks overly broad rules such as `co.uk` or `github.io` is short
   and hand-maintained (no public-suffix dependency).
+- Grayscale screen: OpenHistory Focus's own reminder panels stay in color. The capture filter's
+  window exceptions are taken when capture starts, so an OpenHistory Focus window opened while a
+  grayscale reminder is already showing is hidden behind the gray image until the next reminder.
+  A resolution change during a grayscale reminder switches it to the amber edge. Motion under the
+  gray image is limited to 30 fps.
 - Idle time is not recorded in the timeline; only live idle suppresses reminders.
 - A day file written under a different time zone is shown under the date in its file name.
 - Chat still requires a cloud model.

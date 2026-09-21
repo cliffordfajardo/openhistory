@@ -16,12 +16,17 @@ struct FocusOverlayRequest: Decodable {
     let message: String
     let expectedProcessIdentifier: Int32?
     let preview: Bool
+    /// "amber" (the default when absent) or "grayscale_screen".
+    let experience: String?
+
+    var wantsGrayscale: Bool { experience == "grayscale_screen" }
 
     var isValid: Bool {
         !nudgeId.isEmpty && nudgeId.count <= 100 &&
             (sessionId?.count ?? 0) <= 100 &&
             !title.isEmpty && title.count <= 300 &&
             message.count <= 600 &&
+            (experience == nil || experience == "amber" || experience == "grayscale_screen") &&
             (preview || (expectedProcessIdentifier ?? 0) > 0)
     }
 }
@@ -32,6 +37,10 @@ enum FocusOverlayShowResult: Int32 {
     case notMainThread = 2
     case noDisplay = 3
     case foregroundChanged = 4
+    /// Card and amber edge shown because grayscale needs Screen Recording access.
+    case shownFallbackPermission = 5
+    /// Card and amber edge shown because grayscale capture isn't supported here.
+    case shownFallbackUnavailable = 6
 }
 
 struct FocusOverlayAppearance: Equatable {
@@ -366,9 +375,10 @@ final class FocusOverlayController: NSObject {
         }
 
         installObserversIfNeeded()
+        FocusGrayscaleController.shared.stop()
         let (glow, card, glowView, cardView) = ensurePanels()
         presentationToken &+= 1
-        let wasVisible = glow.isVisible
+        let cardWasVisible = card.isVisible
         current = request
         currentDisplay = displayIdentifier(screen)
 
@@ -380,22 +390,79 @@ final class FocusOverlayController: NSObject {
         card.ignoresMouseEvents = false
         cardInteractiveUntil = .distantFuture
 
-        if !wasVisible {
-            glow.alphaValue = options.reduceMotion ? 1 : 0
-            card.alphaValue = options.reduceMotion ? 1 : 0
-        }
-        glow.orderFrontRegardless()
+        if !cardWasVisible { card.alphaValue = options.reduceMotion ? 1 : 0 }
         card.orderFrontRegardless()
         if !options.reduceMotion {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = FocusOverlayStyle.fadeDuration
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                glow.animator().alphaValue = 1
                 card.animator().alphaValue = 1
             }
         }
+
+        var result = FocusOverlayShowResult.shown
+        var grayscaleStarted = false
+        if request.wantsGrayscale {
+            if let display = currentDisplay {
+                let nudgeId = request.nudgeId
+                // The card is already on screen, so this app appears in the shareable content the
+                // capture filter excludes.
+                let failure = FocusGrayscaleController.shared.start(
+                    screen: screen,
+                    displayID: display,
+                    expectedProcessIdentifier: request.preview ? nil : request.expectedProcessIdentifier,
+                    onEvent: { event in
+                        FocusOverlayController.shared.grayscaleEvent(event, nudgeId: nudgeId)
+                    }
+                )
+                switch failure {
+                case nil: grayscaleStarted = true
+                case .permissionNeeded?: result = .shownFallbackPermission
+                case _?: result = .shownFallbackUnavailable
+                }
+            } else {
+                result = .shownFallbackUnavailable
+            }
+        }
+        if grayscaleStarted {
+            glow.alphaValue = 0
+            glow.orderOut(nil)
+        } else {
+            presentGlow(glow, options: options)
+        }
         NSAccessibility.post(element: cardView, notification: .layoutChanged)
-        return .shown
+        return result
+    }
+
+    private func presentGlow(_ glow: FocusOverlayPanel, options: FocusOverlayAppearance) {
+        if !glow.isVisible { glow.alphaValue = options.reduceMotion ? 1 : 0 }
+        glow.orderFrontRegardless()
+        guard !options.reduceMotion else {
+            glow.alphaValue = 1
+            return
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = FocusOverlayStyle.fadeDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            glow.animator().alphaValue = 1
+        }
+    }
+
+    private func grayscaleEvent(_ event: FocusGrayscaleEvent, nudgeId: String) {
+        guard let request = current, request.nudgeId == nudgeId else { return }
+        switch event {
+        case .active:
+            reportEffect("active", request: request, reason: nil)
+        case .failed(let reason):
+            if let glow = glowPanel {
+                glowView?.needsDisplay = true
+                presentGlow(glow, options: FocusOverlayAppearance.current)
+            }
+            reportEffect("fallback", request: request, reason: reason.rawValue)
+        case .foregroundChanged:
+            hide(nudgeId: request.nudgeId, immediate: true)
+            report(action: "hidden", request: request, reason: "foreground_changed")
+        }
     }
 
     /// Hides the current reminder. A nudge identifier limits the hide to that reminder so a late
@@ -403,6 +470,7 @@ final class FocusOverlayController: NSObject {
     func hide(nudgeId: String?, immediate: Bool) {
         guard let request = current else { return }
         if let nudgeId, !nudgeId.isEmpty, nudgeId != request.nudgeId { return }
+        FocusGrayscaleController.shared.stop()
         current = nil
         currentDisplay = nil
         presentationToken &+= 1
@@ -451,6 +519,7 @@ final class FocusOverlayController: NSObject {
 
     func shutdown() {
         hide(nudgeId: nil, immediate: true)
+        FocusGrayscaleController.shared.stop()
         if observersInstalled {
             NotificationCenter.default.removeObserver(self)
             NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -473,7 +542,6 @@ final class FocusOverlayController: NSObject {
     }
 
     private func report(action: String, request: FocusOverlayRequest, reason: String?) {
-        guard let callback = actionCallback else { return }
         var payload: [String: Any] = [
             "action": action,
             "nudgeId": request.nudgeId,
@@ -481,6 +549,22 @@ final class FocusOverlayController: NSObject {
         ]
         if let sessionId = request.sessionId { payload["sessionId"] = sessionId }
         if let reason { payload["reason"] = reason }
+        send(payload)
+    }
+
+    private func reportEffect(_ status: String, request: FocusOverlayRequest, reason: String?) {
+        var payload: [String: Any] = [
+            "event": "effect",
+            "status": status,
+            "nudgeId": request.nudgeId,
+            "preview": request.preview
+        ]
+        if let reason { payload["reason"] = reason }
+        send(payload)
+    }
+
+    private func send(_ payload: [String: Any]) {
+        guard let callback = actionCallback else { return }
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
         String(decoding: data, as: UTF8.self).withCString { callback($0, actionContext) }
     }
@@ -575,6 +659,7 @@ final class FocusOverlayController: NSObject {
             return
         }
         layout(glow: glow, card: card, glowView: glowView, cardView: cardView, on: screen)
+        FocusGrayscaleController.shared.displayChanged(to: screen)
     }
 
     @objc private func foregroundApplicationChanged() {

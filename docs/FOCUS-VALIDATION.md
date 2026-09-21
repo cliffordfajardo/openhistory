@@ -28,6 +28,12 @@ An interactive 60-second interval in the first standalone build averaged 26.91% 
 
 ## Remaining limits
 
+- Grayscale screen: 286 TypeScript tests, 25 Swift collector tests, native bridge smoke,
+  distribution checks and the signed host package passed. `npm run test:grayscale-gpu` renders
+  synthetic color quadrants through the production GPU renderer and verifies grayscale,
+  orientation and scaling at two sizes without screen access. The installed app preserves goals
+  and sites and correctly reports amber fallback when Screen Recording is denied. Live capture,
+  first-frame presentation, revocation and resource use still need permission-enabled validation.
 - Browser detection depends on accessible HTTP(S) addresses. Safari and the other recognized browsers have not received the same live validation as Chrome. Private-window detection is heuristic, not a universal guarantee.
 - App-switch dismissal uses a native activation notification. Same-app tab/window changes wait for the existing 0.75-second sampler; unresponsive accessibility APIs can delay it.
 - Multiple displays, final-build fullscreen/Spaces behavior, physical keyboard delivery and OS-wide Reduce Motion/Transparency settings have not all been exercised on this machine. The native implementation handles those settings and uses nonactivating panels, but this is not a universal platform guarantee.

@@ -70,6 +70,12 @@ const appleSource = readFileSync(resolve(root, "src/main/inference/providers/app
 const localPackagerSource = readFileSync(resolve(root, "scripts/package-local-app.ts"), "utf8");
 const bridgeBuildSource = readFileSync(resolve(root, "native/bridge/build.sh"), "utf8");
 expect(bridgeBuildSource.includes("native/bridge/FocusOverlay.swift"), "native bridge must compile the Focus overlay");
+expect(bridgeBuildSource.includes("native/bridge/FocusGrayscale.swift") &&
+  bridgeBuildSource.includes("-framework ScreenCaptureKit"), "native bridge must compile and link the grayscale reminder");
+expect(/\bscreen\b/i.test(config.mac?.extendInfo?.NSScreenCaptureUsageDescription ?? ""),
+  "ToDesktop Info.plist must explain Screen Recording use");
+expect(localPackagerSource.includes("extendInfo: toDesktopConfig.mac.extendInfo"),
+  "local package must carry the same Info.plist usage descriptions as ToDesktop");
 expect(bridgeBuildSource.includes("ActivityCore.build") && bridgeBuildSource.includes("-name '*.swift.o'"),
   "native bridge must link every ActivityCore object instead of an enumerated list");
 const beforeBuildSource = readFileSync(resolve(root, "scripts/todesktop-before-build.cjs"), "utf8");

@@ -2,7 +2,11 @@ import {
   FOCUS_TIMING,
   matchingFocusDomain,
   type FocusDetectionState,
+  type FocusEffectFallbackReason,
+  type FocusEffectState,
+  type FocusExperience,
   type FocusForegroundSummary,
+  type FocusScreenCaptureAccess,
   type FocusSession,
   type Goal
 } from "@shared/focus";
@@ -40,9 +44,25 @@ export interface VisibleNudge {
   shownAt: number;
 }
 
+/** Effect of the reminder or preview named by `nudgeId`; kept after it hides for the Focus page. */
+export interface ReminderEffect {
+  nudgeId: string;
+  requested: FocusExperience;
+  status: FocusEffectState["status"];
+  fallbackReason: FocusEffectFallbackReason | null;
+  preview: boolean;
+  visible: boolean;
+  updatedAt: number;
+}
+
 export interface FocusMachineState {
   session: { status: "idle" } | ActiveSession;
   capability: FocusCapability;
+  experience: FocusExperience;
+  screenCapture: FocusScreenCaptureAccess;
+  effect?: ReminderEffect;
+  /** Set only within the transition that replaced a visible reminder for a new style. */
+  restyling?: boolean;
   evidence?: ForegroundEvidence;
   nudge?: VisibleNudge;
   /** Most recent reminder shown in this session; late native actions may still refer to it. */
@@ -82,7 +102,16 @@ export type FocusInput =
     sessionId?: string;
     preview: boolean;
   }
-  | { type: "overlay_rejected"; now: number; nudgeId: string };
+  | { type: "overlay_rejected"; now: number; nudgeId: string }
+  | { type: "experience_changed"; now: number; experience: FocusExperience }
+  | { type: "screen_capture"; now: number; access: FocusScreenCaptureAccess }
+  | {
+    type: "effect_status";
+    now: number;
+    nudgeId: string;
+    status: "active" | "fallback";
+    reason?: FocusEffectFallbackReason;
+  };
 
 export type FocusEffect =
   | { type: "observe"; generation: number }
@@ -95,6 +124,7 @@ export type FocusEffect =
       message: string;
       expectedProcessIdentifier: number | null;
       preview: boolean;
+      experience: FocusExperience;
     };
   }
   | { type: "hide"; nudgeId: string; immediate: boolean };
@@ -104,10 +134,16 @@ export interface FocusTransition {
   effects: FocusEffect[];
 }
 
-export function initialFocusState(capability: FocusCapability): FocusMachineState {
+export function initialFocusState(
+  capability: FocusCapability,
+  experience: FocusExperience = "amber",
+  screenCapture: FocusScreenCaptureAccess = "unsupported"
+): FocusMachineState {
   return {
     session: { status: "idle" },
     capability,
+    experience,
+    screenCapture,
     idleSeconds: 0,
     nudgeCounter: 0,
     generationCounter: 0
@@ -198,7 +234,8 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
           title: input.copy.title,
           message: input.copy.message,
           expectedProcessIdentifier: null,
-          preview: true
+          preview: true,
+          experience: beginEffect(state, input.previewId, true, now)
         }
       });
       break;
@@ -212,6 +249,21 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
       }
       if (state.preview?.id === input.nudgeId) state.preview = undefined;
       break;
+    case "experience_changed":
+      if (state.experience === input.experience) break;
+      state.experience = input.experience;
+      if (state.preview) effects.push(hidePreview(state, true));
+      if (state.nudge) {
+        effects.push(hideNudge(state, true));
+        state.restyling = true;
+      }
+      break;
+    case "screen_capture":
+      state.screenCapture = input.access;
+      break;
+    case "effect_status":
+      applyEffectStatus(state, input);
+      break;
     case "tick":
       if (input.idleSeconds !== undefined && Number.isFinite(input.idleSeconds)) {
         state.idleSeconds = Math.max(0, input.idleSeconds);
@@ -220,7 +272,48 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
   }
 
   evaluate(state, now, effects);
+  delete state.restyling;
+  const effect = state.effect;
+  if (effect?.visible && effect.nudgeId !== state.nudge?.id && effect.nudgeId !== state.preview?.id) {
+    state.effect = { ...effect, visible: false, updatedAt: now };
+  }
   return { state, effects };
+}
+
+function beginEffect(state: FocusMachineState, nudgeId: string, preview: boolean, now: number): FocusExperience {
+  const base = { nudgeId, requested: state.experience, preview, visible: true, updatedAt: now };
+  if (state.experience === "amber") {
+    state.effect = { ...base, status: "showing", fallbackReason: null };
+    return "amber";
+  }
+  if (state.screenCapture !== "granted") {
+    state.effect = {
+      ...base,
+      status: "fallback",
+      fallbackReason: state.screenCapture === "unsupported" ? "unsupported" : "permission_needed"
+    };
+    return "amber";
+  }
+  state.effect = { ...base, status: "preparing", fallbackReason: null };
+  return "grayscale_screen";
+}
+
+function applyEffectStatus(
+  state: FocusMachineState,
+  input: Extract<FocusInput, { type: "effect_status" }>
+): void {
+  const effect = state.effect;
+  if (!effect?.visible || effect.nudgeId !== input.nudgeId || effect.requested !== "grayscale_screen") return;
+  if (input.status === "active" && effect.status === "preparing") {
+    state.effect = { ...effect, status: "showing", updatedAt: input.now };
+  } else if (input.status === "fallback" && effect.status !== "fallback") {
+    state.effect = {
+      ...effect,
+      status: "fallback",
+      fallbackReason: input.reason ?? "capture_failed",
+      updatedAt: input.now
+    };
+  }
 }
 
 function acceptEvidence(
@@ -299,7 +392,8 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
   if (!ready || evidence?.kind !== "browser" || !matchedDomain) return;
   if (session.snoozedUntil !== null) return;
   if (state.dismissedUntil !== undefined && now < state.dismissedUntil) return;
-  if (state.lastNudgeAt !== undefined && now - state.lastNudgeAt < FOCUS_TIMING.globalCooldownMs) return;
+  if (!state.restyling && state.lastNudgeAt !== undefined &&
+      now - state.lastNudgeAt < FOCUS_TIMING.globalCooldownMs) return;
   if (state.idleSeconds >= FOCUS_TIMING.idleSuppressionSeconds) return;
 
   if (state.preview) effects.push(hidePreview(state, true));
@@ -321,7 +415,8 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
       sessionId: session.id,
       ...reminderCopy(session.goal, session.intention),
       expectedProcessIdentifier: nudge.processIdentifier,
-      preview: false
+      preview: false,
+      experience: beginEffect(state, nudge.id, false, now)
     }
   });
 }
@@ -409,6 +504,19 @@ export function foregroundSummary(state: FocusMachineState, now: number): FocusF
     case "session_locked": return "locked";
     default: return "unknown";
   }
+}
+
+export function effectView(state: FocusMachineState): FocusEffectState | null {
+  const effect = state.effect;
+  if (!effect) return null;
+  return {
+    requested: effect.requested,
+    status: effect.status,
+    fallbackReason: effect.fallbackReason,
+    preview: effect.preview,
+    visible: effect.visible,
+    updatedAt: new Date(effect.updatedAt).toISOString()
+  };
 }
 
 export function needsTimer(state: FocusMachineState): boolean {

@@ -13,6 +13,8 @@ interface NativeBridge {
   showFocusOverlay(requestJSON: string): number;
   hideFocusOverlay(nudgeId: string, immediate: boolean): void;
   setFocusOverlayActionHandler(handler: ((line: string) => void) | null): void;
+  screenCaptureAccess(): boolean;
+  requestScreenCaptureAccess(): boolean;
 }
 
 const root = resolve(import.meta.dirname, "..");
@@ -25,10 +27,27 @@ const lines: string[] = [];
 try {
   for (const name of [
     "startCollector", "stopCollector", "setForegroundObservation",
-    "showFocusOverlay", "hideFocusOverlay", "setFocusOverlayActionHandler"
+    "showFocusOverlay", "hideFocusOverlay", "setFocusOverlayActionHandler",
+    "screenCaptureAccess", "requestScreenCaptureAccess"
   ] as const) {
     assert.equal(typeof bridge[name], "function", `bridge is missing ${name}`);
   }
+  // Never call requestScreenCaptureAccess here: it may show the system prompt.
+  const screenCaptureAccess = bridge.screenCaptureAccess();
+  assert.equal(typeof screenCaptureAccess, "boolean");
+  assert.equal(bridge.showFocusOverlay(JSON.stringify({
+    nudgeId: "smoke-style", sessionId: null, title: "Smoke", message: "",
+    expectedProcessIdentifier: null, preview: true, experience: "sepia"
+  })), 1, "an unknown reminder style must be rejected");
+  assert.equal(bridge.showFocusOverlay(JSON.stringify({
+    nudgeId: "smoke-gray",
+    sessionId: "session-smoke",
+    title: "Smoke",
+    message: "",
+    expectedProcessIdentifier: 1,
+    preview: false,
+    experience: "grayscale_screen"
+  })), 4, "a grayscale reminder for a process that is not frontmost must be refused before capture");
 
   assert.throws(() => bridge.setForegroundObservation(-1), TypeError);
   assert.throws(() => bridge.showFocusOverlay(42 as unknown as string), TypeError);
@@ -87,7 +106,7 @@ try {
   bridge.setForegroundObservation(0);
   process.stdout.write(`Native bridge smoke passed: ${activity.map((event) => event.kind).join(", ")}; ` +
     `evidence ${evidence.map((packet) => packet.reason ?? packet.kind).join(", ")}; ` +
-    `accessibility trusted: ${bridge.isTrusted()}\n`);
+    `accessibility trusted: ${bridge.isTrusted()}; screen recording allowed: ${screenCaptureAccess}\n`);
 } finally {
   bridge.stopCollector();
   rmSync(resolve(dataDirectory, ".."), { recursive: true, force: true });

@@ -18,7 +18,7 @@ test("starts empty, creates goals privately and selects the first one", async (c
     version: 1,
     goals: [],
     selectedGoalId: null,
-    preferences: { domains: [], durationMinutes: 25 }
+    preferences: { domains: [], durationMinutes: 25, experience: "amber" }
   });
 
   const { goal } = store.saveGoal({ title: "  Ship\tthe   guide ", why: "Readers\r\nare waiting", currentFocus: "Outline" });
@@ -54,11 +54,40 @@ test("edits, selects and deletes goals without leaving a dangling selection", as
 test("persists normalized distracting sites and duration", async (context) => {
   const directory = await testDirectory(context);
   const store = new FocusStore(directory);
-  store.savePreferences({ domains: ["video.example", "social.example"], durationMinutes: 50 });
+  store.savePreferences({ domains: ["video.example", "social.example"], durationMinutes: 50, experience: "amber" });
   assert.deepEqual(new FocusStore(directory).load().preferences, {
     domains: ["social.example", "video.example"],
-    durationMinutes: 50
+    durationMinutes: 50,
+    experience: "amber"
   });
+});
+
+test("reads files saved before reminder styles as amber without losing goals or sites", async (context) => {
+  const directory = await testDirectory(context);
+  const legacy = JSON.stringify({
+    version: 1,
+    goals: [{ id: "goal-00000001-test", title: "Kept", why: "Because", currentFocus: "Now" }],
+    selectedGoalId: "goal-00000001-test",
+    preferences: { domains: ["video.example"], durationMinutes: 50 }
+  });
+  writeFileSync(resolve(directory, "focus.json"), legacy);
+  const store = new FocusStore(directory);
+  assert.equal(store.recoveredFromInvalidFile, false);
+  assert.deepEqual(store.load(), {
+    version: 1,
+    goals: [{ id: "goal-00000001-test", title: "Kept", why: "Because", currentFocus: "Now" }],
+    selectedGoalId: "goal-00000001-test",
+    preferences: { domains: ["video.example"], durationMinutes: 50, experience: "amber" }
+  });
+  assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
+  assert.deepEqual(readdirSync(directory), ["focus.json"]);
+
+  store.setExperience("grayscale_screen");
+  const reloaded = new FocusStore(directory).load();
+  assert.equal(reloaded.preferences.experience, "grayscale_screen");
+  assert.deepEqual(reloaded.preferences.domains, ["video.example"]);
+  assert.equal(reloaded.goals[0]?.title, "Kept");
+  assert.equal(reloaded.version, 1);
 });
 
 test("never stores an active session", async (context) => {
@@ -90,6 +119,12 @@ test("recovers from malformed files by starting fresh and preserving the origina
       goals: [],
       selectedGoalId: null,
       preferences: { domains: [], durationMinutes: 100_000 }
+    }),
+    JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, experience: "sepia" }
     })
   ]) {
     const directory = await testDirectory(context);

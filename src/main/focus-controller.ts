@@ -1,10 +1,17 @@
-import type { FocusViewState, GoalDraft } from "@shared/focus";
+import type {
+  FocusEffectFallbackReason,
+  FocusExperience,
+  FocusScreenCaptureAccess,
+  FocusViewState,
+  GoalDraft
+} from "@shared/focus";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { z } from "zod";
 import type { ForegroundEvidence } from "./foreground-evidence";
 import {
-  FocusPreferencesSchema,
+  FocusExperienceSchema,
+  FocusPreferencesInputSchema,
   FocusStartRequestSchema,
   GoalDraftSchema,
   GoalIdSchema,
@@ -12,6 +19,7 @@ import {
 } from "./focus-schemas";
 import {
   detectionState,
+  effectView,
   foregroundSummary,
   initialFocusState,
   needsTimer,
@@ -25,8 +33,14 @@ import {
 } from "./focus-state";
 import type { FocusStore } from "./focus-store";
 
+/**
+ * `shown_fallback_*`: the card and amber edge are on screen, but grayscale was requested and the
+ * native side could not start it (no Screen Recording access, or no capture/GPU support).
+ */
 export type FocusOverlayShowResult =
   | "shown"
+  | "shown_fallback_permission"
+  | "shown_fallback_unavailable"
   | "invalid_request"
   | "not_main_thread"
   | "no_display"
@@ -40,6 +54,7 @@ export interface FocusOverlayRequest {
   message: string;
   expectedProcessIdentifier: number | null;
   preview: boolean;
+  experience: FocusExperience;
 }
 
 export interface FocusOverlayBinding {
@@ -48,9 +63,17 @@ export interface FocusOverlayBinding {
   setActionHandler(handler: ((line: string) => void) | null): void;
 }
 
+/** macOS Screen Recording access. `access` never prompts; `request` may show the system prompt once. */
+export interface FocusScreenCaptureBinding {
+  access(): boolean;
+  request(): boolean;
+}
+
 export interface FocusControllerOptions {
   store: FocusStore;
   overlay: FocusOverlayBinding | undefined;
+  /** Absent when the native bridge can't capture; grayscale then falls back to amber. */
+  screenCapture?: FocusScreenCaptureBinding;
   setForegroundObservation: (generation: number) => void;
   capability: () => Omit<FocusCapability, "overlayAvailable">;
   now?: () => number;
@@ -71,6 +94,18 @@ const OverlayActionSchema = z.object({
   preview: z.boolean(),
   reason: z.string().max(100).optional()
 }).strict();
+const EffectStatusSchema = z.object({
+  event: z.literal("effect"),
+  status: z.enum(["active", "fallback"]),
+  nudgeId: z.string().min(1).max(100),
+  preview: z.boolean(),
+  reason: z.enum(["permission_needed", "unsupported", "capture_failed", "no_frame", "display_unavailable"])
+    .optional()
+}).strict();
+const SHOW_FALLBACK_REASONS: Partial<Record<FocusOverlayShowResult, FocusEffectFallbackReason>> = {
+  shown_fallback_permission: "permission_needed",
+  shown_fallback_unavailable: "unsupported"
+};
 
 export class FocusController extends EventEmitter {
   private machine: FocusMachineState;
@@ -82,6 +117,7 @@ export class FocusController extends EventEmitter {
   private readonly createPreviewId: () => string;
   private readonly timers: NonNullable<FocusControllerOptions["timers"]>;
   private shutDown = false;
+  private screenCaptureRequested = false;
 
   constructor(private readonly options: FocusControllerOptions) {
     super();
@@ -93,7 +129,11 @@ export class FocusController extends EventEmitter {
       setInterval: (callback, milliseconds) => setInterval(callback, milliseconds),
       clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>)
     };
-    this.machine = initialFocusState(this.currentCapability());
+    this.machine = initialFocusState(
+      this.currentCapability(),
+      options.store.load().preferences.experience,
+      this.currentScreenCapture()
+    );
     options.overlay?.setActionHandler((line) => this.handleOverlayAction(line));
   }
 
@@ -111,6 +151,8 @@ export class FocusController extends EventEmitter {
       lastReminderAt: this.machine.lastNudgeAt === undefined
         ? null
         : new Date(this.machine.lastNudgeAt).toISOString(),
+      screenCapture: { access: this.machine.screenCapture, requested: this.screenCaptureRequested },
+      effect: effectView(this.machine),
       recoveredFromInvalidFile: this.options.store.recoveredFromInvalidFile
     };
   }
@@ -133,10 +175,50 @@ export class FocusController extends EventEmitter {
   }
 
   savePreferences(value: unknown): FocusViewState {
-    const document = this.options.store.savePreferences(
-      parseOrThrow(FocusPreferencesSchema, value, "Check the site list and duration")
-    );
+    const input = parseOrThrow(FocusPreferencesInputSchema, value, "Check the site list and duration");
+    const document = this.options.store.savePreferences({
+      domains: input.domains,
+      durationMinutes: input.durationMinutes,
+      experience: input.experience ?? this.options.store.load().preferences.experience
+    });
     this.dispatch({ type: "domains_changed", now: this.now(), domains: document.preferences.domains });
+    this.applyExperience(document.preferences.experience);
+    return this.publish();
+  }
+
+  /** Saves the reminder style and applies it to a running session without restarting it. */
+  setExperience(value: unknown): FocusViewState {
+    const experience = parseOrThrow(FocusExperienceSchema, value, "Choose a reminder style");
+    this.options.store.setExperience(experience);
+    this.applyExperience(experience);
+    return this.publish();
+  }
+
+  /** Re-reads Screen Recording access without prompting. */
+  refreshScreenCapture(): FocusViewState {
+    this.syncScreenCapture();
+    return this.publish();
+  }
+
+  /**
+   * Asks macOS for Screen Recording access. Only an explicit click reaches this, and the system
+   * prompt is requested at most once per launch; afterwards the page offers System Settings.
+   */
+  requestScreenCapture(): FocusViewState {
+    const binding = this.options.screenCapture;
+    if (!binding) throw new Error("Screen capture isn't available in this build");
+    this.syncScreenCapture();
+    if (this.machine.screenCapture !== "granted" && !this.screenCaptureRequested) {
+      this.screenCaptureRequested = true;
+      try {
+        binding.request();
+      } catch (error) {
+        console.error("Unable to request Screen Recording access", {
+          name: error instanceof Error ? error.name : "UnknownError"
+        });
+      }
+      this.syncScreenCapture();
+    }
     return this.publish();
   }
 
@@ -191,6 +273,7 @@ export class FocusController extends EventEmitter {
       ? session.goal
       : document.goals.find((candidate) => candidate.id === document.selectedGoalId);
     const intention = session.status === "active" ? session.intention : goal?.currentFocus ?? "";
+    this.syncScreenCapture();
     this.dispatch({
       type: "preview",
       now: this.now(),
@@ -219,6 +302,7 @@ export class FocusController extends EventEmitter {
 
   refreshCapability(): void {
     this.dispatch({ type: "capability", now: this.now(), capability: this.currentCapability() });
+    this.syncScreenCapture();
     this.publish();
   }
 
@@ -240,6 +324,19 @@ export class FocusController extends EventEmitter {
     try {
       value = JSON.parse(line);
     } catch {
+      return;
+    }
+    const status = EffectStatusSchema.safeParse(value);
+    if (status.success) {
+      this.dispatch({
+        type: "effect_status",
+        now: this.now(),
+        nudgeId: status.data.nudgeId,
+        status: status.data.status,
+        ...(status.data.reason ? { reason: status.data.reason } : {})
+      });
+      if (status.data.reason === "permission_needed") this.syncScreenCapture();
+      this.publish();
       return;
     }
     const parsed = OverlayActionSchema.safeParse(value);
@@ -292,7 +389,17 @@ export class FocusController extends EventEmitter {
         name: error instanceof Error ? error.name : "UnknownError"
       });
     }
-    if (result !== "shown") {
+    const fallbackReason = SHOW_FALLBACK_REASONS[result];
+    if (fallbackReason) {
+      this.dispatch({
+        type: "effect_status",
+        now: this.now(),
+        nudgeId: effect.request.nudgeId,
+        status: "fallback",
+        reason: fallbackReason
+      });
+      if (fallbackReason === "permission_needed") this.syncScreenCapture();
+    } else if (result !== "shown") {
       this.dispatch({ type: "overlay_rejected", now: this.now(), nudgeId: effect.request.nudgeId });
     }
   }
@@ -305,8 +412,30 @@ export class FocusController extends EventEmitter {
       idleSeconds = 0;
     }
     this.dispatch({ type: "capability", now: this.now(), capability: this.currentCapability() });
+    this.syncScreenCapture();
     this.dispatch({ type: "tick", now: this.now(), idleSeconds });
     this.publish();
+  }
+
+  private applyExperience(experience: FocusExperience): void {
+    if (experience === this.machine.experience) return;
+    this.syncScreenCapture();
+    this.dispatch({ type: "experience_changed", now: this.now(), experience });
+  }
+
+  private syncScreenCapture(): void {
+    const access = this.currentScreenCapture();
+    if (access !== this.machine.screenCapture) this.dispatch({ type: "screen_capture", now: this.now(), access });
+  }
+
+  private currentScreenCapture(): FocusScreenCaptureAccess {
+    const binding = this.options.screenCapture;
+    if (!binding) return "unsupported";
+    try {
+      return binding.access() ? "granted" : "not_granted";
+    } catch {
+      return "unsupported";
+    }
   }
 
   private syncTimer(): void {

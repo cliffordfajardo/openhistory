@@ -75,6 +75,7 @@
     "desktop:package:local": "npm run build:electron && npm run package:native:todesktop && node --import tsx scripts/package-local-app.ts",
     "desktop:package:local:host": "npm run build:electron && npm run package:native:release && node --import tsx scripts/package-local-app.ts --host",
     "test:native-bridge-smoke": "node --import tsx scripts/smoke-native-bridge.ts",
+    "test:grayscale-gpu": "sh scripts/test-focus-grayscale-gpu.sh",
     "desktop:dry-run": "npm run build:electron && npm run package:native:todesktop && node tools/todesktop/node_modules/@todesktop/cli/dist/cli.js build --dry-run --files",
     "desktop:build": "node scripts/require-todesktop-credentials.cjs && npm run build:electron && npm run package:native:todesktop && node tools/todesktop/node_modules/@todesktop/cli/dist/cli.js build --ephemeral --follow-logs",
     "desktop:smoke-test": "node scripts/require-todesktop-credentials.cjs && node tools/todesktop/node_modules/@todesktop/cli/dist/cli.js smoke-test --ephemeral --latest",

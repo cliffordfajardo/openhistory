@@ -42,9 +42,47 @@ export interface GoalDraft {
   currentFocus: string;
 }
 
+/**
+ * How a reminder looks. `amber` draws a warm edge around the display. `grayscale_screen` shows the
+ * entire display that holds the distracting window in grayscale; other displays are unchanged.
+ */
+export const FOCUS_EXPERIENCES = ["amber", "grayscale_screen"] as const;
+export type FocusExperience = (typeof FOCUS_EXPERIENCES)[number];
+
 export interface FocusPreferences {
   domains: string[];
   durationMinutes: number;
+  experience: FocusExperience;
+}
+
+/** Whether macOS currently allows this app to capture the screen, checked without prompting. */
+export type FocusScreenCaptureAccess = "granted" | "not_granted" | "unsupported";
+
+export interface FocusScreenCaptureState {
+  access: FocusScreenCaptureAccess;
+  /** The system prompt was already requested in this launch; macOS shows it at most once. */
+  requested: boolean;
+}
+
+/** Why a grayscale reminder showed the amber edge instead. */
+export type FocusEffectFallbackReason =
+  | "permission_needed"
+  | "unsupported"
+  | "capture_failed"
+  | "no_frame"
+  | "display_unavailable";
+
+/**
+ * The visual effect of the latest reminder or preview. Grayscale stays "preparing" until the
+ * native side reports its first captured frame on screen.
+ */
+export interface FocusEffectState {
+  requested: FocusExperience;
+  status: "preparing" | "showing" | "fallback";
+  fallbackReason: FocusEffectFallbackReason | null;
+  preview: boolean;
+  visible: boolean;
+  updatedAt: string;
 }
 
 export interface FocusStartRequest {
@@ -103,6 +141,8 @@ export interface FocusViewState {
   foreground: FocusForegroundSummary;
   reminderVisible: boolean;
   lastReminderAt: string | null;
+  screenCapture: FocusScreenCaptureState;
+  effect: FocusEffectState | null;
   recoveredFromInvalidFile: boolean;
 }
 

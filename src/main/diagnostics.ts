@@ -41,7 +41,12 @@ export function sanitizedDiagnostics(
       goalCount: state.focus?.goals.length ?? 0,
       distractingSiteCount: state.focus?.preferences.domains.length ?? 0,
       sessionActive: state.focus?.session.status === "active",
-      detection: state.focus?.detection ?? "unknown"
+      detection: state.focus?.detection ?? "unknown",
+      reminderStyle: state.focus?.preferences.experience ?? "amber",
+      screenCaptureAccess: state.focus?.screenCapture?.access ?? "unsupported",
+      lastEffect: state.focus?.effect
+        ? { status: state.focus.effect.status, fallbackReason: state.focus.effect.fallbackReason }
+        : null
     },
     inference: {
       enabled: state.inference.settings.enabled,

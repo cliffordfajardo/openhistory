@@ -318,6 +318,18 @@ static napi_value request_trust(napi_env env, napi_callback_info info) {
     return boolean_value(env, trusted);
 }
 
+// Never prompts. The grayscale reminder captures only while this is true.
+static napi_value screen_capture_access(napi_env env, napi_callback_info info) {
+    (void)info;
+    return boolean_value(env, CGPreflightScreenCaptureAccess());
+}
+
+// Only called from an explicit "Grant Screen Recording" click. macOS shows its prompt at most once.
+static napi_value request_screen_capture_access(napi_env env, napi_callback_info info) {
+    (void)info;
+    return boolean_value(env, CGRequestScreenCaptureAccess());
+}
+
 static napi_value process_identifier(napi_env env, napi_callback_info info) {
     (void)info;
     napi_value result;
@@ -375,6 +387,8 @@ NAPI_MODULE_INIT() {
         { "hideFocusOverlay", NULL, hide_focus_overlay, NULL, NULL, NULL, napi_default, NULL },
         { "isTrusted", NULL, is_trusted, NULL, NULL, NULL, napi_default, NULL },
         { "requestTrust", NULL, request_trust, NULL, NULL, NULL, napi_default, NULL },
+        { "screenCaptureAccess", NULL, screen_capture_access, NULL, NULL, NULL, napi_default, NULL },
+        { "requestScreenCaptureAccess", NULL, request_screen_capture_access, NULL, NULL, NULL, napi_default, NULL },
         { "processIdentifier", NULL, process_identifier, NULL, NULL, NULL, napi_default, NULL },
         { "canReadFocusedApplication", NULL, can_read_focused_application, NULL, NULL, NULL, napi_default, NULL },
         { "bundleIdentifier", NULL, bundle_identifier, NULL, NULL, NULL, napi_default, NULL }

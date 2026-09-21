@@ -45,7 +45,11 @@ const config = {
     }
   ],
   mac: {
-    category: "public.app-category.productivity"
+    category: "public.app-category.productivity",
+    extendInfo: {
+      NSScreenCaptureUsageDescription:
+        "OpenHistory Focus reads the screen only while an optional grayscale Focus reminder is showing, to display it in gray. Frames stay in memory and are never saved or sent."
+    }
   }
 };
 

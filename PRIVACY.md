@@ -8,7 +8,12 @@ Last updated: August 16, 2026
 > browser addresses; email and messaging stay excluded at first run; summaries start off and setup
 > can finish with **Keep everything local — summaries off**. During a Focus session the existing
 > collector also produces short-lived foreground observations (browser host or "unknown") that are
-> never written to disk. Goals and Focus preferences are stored in the same private folder, are
+> never written to disk. The optional **Grayscale screen** reminder style (off by default; the
+> amber style needs no screen access) asks for macOS Screen Recording and, only while a
+> reminder or preview is showing, captures the display it appears on to redraw it in gray. Those
+> frames stay transient in memory and GPU buffers: they are never saved, logged, analyzed, sent
+> to a model or uploaded, and are released when the reminder hides. Activity capture itself still
+> takes no screenshots. Goals and Focus preferences are stored in the same private folder, are
 > removed by "Delete all local data", and are not sent to models or exposed through MCP. The
 > upstream auto-updater is disabled. See [docs/FOCUS.md](docs/FOCUS.md). Where this note and the
 > policy below differ, this note describes the fork.

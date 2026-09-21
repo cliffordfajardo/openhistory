@@ -9,7 +9,8 @@ import {
   FocusController,
   type FocusOverlayBinding,
   type FocusOverlayRequest,
-  type FocusOverlayShowResult
+  type FocusOverlayShowResult,
+  type FocusScreenCaptureBinding
 } from "./focus-controller";
 import type { FocusCapability } from "./focus-state";
 import { FocusStore } from "./focus-store";
@@ -19,9 +20,11 @@ class FakeOverlay implements FocusOverlayBinding {
   hidden: Array<{ nudgeId: string; immediate: boolean }> = [];
   handler: ((line: string) => void) | null = null;
   result: FocusOverlayShowResult = "shown";
+  onShow?: () => void;
 
   show(request: FocusOverlayRequest): FocusOverlayShowResult {
     this.shown.push(request);
+    this.onShow?.();
     return this.result;
   }
 
@@ -31,6 +34,22 @@ class FakeOverlay implements FocusOverlayBinding {
 
   setActionHandler(handler: ((line: string) => void) | null): void {
     this.handler = handler;
+  }
+}
+
+class FakeScreenCapture implements FocusScreenCaptureBinding {
+  granted = false;
+  requests = 0;
+  grantOnRequest = false;
+
+  access(): boolean {
+    return this.granted;
+  }
+
+  request(): boolean {
+    this.requests += 1;
+    if (this.grantOnRequest) this.granted = true;
+    return this.granted;
   }
 }
 
@@ -63,9 +82,14 @@ interface Fixture {
   states: FocusViewState[];
   store: FocusStore;
   directory: string;
+  screenCapture: FakeScreenCapture;
 }
 
-async function fixture(context: TestContext, directory?: string): Promise<Fixture> {
+async function fixture(
+  context: TestContext,
+  directory?: string,
+  screenCapture = new FakeScreenCapture()
+): Promise<Fixture> {
   const dataDirectory = directory ?? await testDirectory(context);
   const overlay = new FakeOverlay();
   const timers = new ManualTimers();
@@ -83,6 +107,7 @@ async function fixture(context: TestContext, directory?: string): Promise<Fixtur
   const controller = new FocusController({
     store,
     overlay,
+    screenCapture,
     setForegroundObservation: (generation) => observations.push(generation),
     capability: () => capability,
     now: () => clock.now,
@@ -94,7 +119,9 @@ async function fixture(context: TestContext, directory?: string): Promise<Fixtur
   const states: FocusViewState[] = [];
   controller.on("state", (state: FocusViewState) => states.push(state));
   context.after(() => controller.shutdown());
-  return { controller, overlay, timers, observations, clock, capability, states, store, directory: dataDirectory };
+  return {
+    controller, overlay, timers, observations, clock, capability, states, store, directory: dataDirectory, screenCapture
+  };
 }
 
 function readyToStart(f: Fixture): string {
@@ -260,7 +287,8 @@ test("previews through the same native path without collection or a session", as
     title: "Ship the guide",
     message: "Back to: Outline",
     expectedProcessIdentifier: null,
-    preview: true
+    preview: true,
+    experience: "amber"
   });
   assert.equal(f.controller.view().session.status, "idle");
   assert.equal(f.timers.callbacks.size, 1, "a timer runs to fade the preview out");
@@ -339,4 +367,184 @@ test("site edits apply to the active session without resetting its timer, goal o
   assert.equal(f.controller.view().session.status, "active");
   assert.equal(f.controller.view().reminderVisible, false);
   assert.deepEqual(f.observations, [1], "changing sites must not restart the collector observation");
+});
+
+function effectLine(nudgeId: string, status: "active" | "fallback", reason?: string): string {
+  return JSON.stringify({ event: "effect", status, nudgeId, preview: false, ...(reason ? { reason } : {}) });
+}
+
+test("persists the reminder style; site edits without a style keep it", async (context) => {
+  const f = await fixture(context);
+  assert.equal(f.controller.view().preferences.experience, "amber");
+  for (const value of [undefined, "", "sepia", 1, { experience: "grayscale_screen" }]) {
+    assert.throws(() => f.controller.setExperience(value));
+  }
+  assert.equal(f.controller.setExperience("grayscale_screen").preferences.experience, "grayscale_screen");
+  f.controller.savePreferences({ domains: ["video.example"], durationMinutes: 25 });
+  assert.equal(f.controller.view().preferences.experience, "grayscale_screen");
+  assert.throws(() => f.controller.savePreferences({ domains: [], durationMinutes: 25, experience: "sepia" }));
+
+  const restarted = await fixture(context, f.directory);
+  assert.equal(restarted.controller.view().preferences.experience, "grayscale_screen");
+});
+
+test("switching style mid-session keeps goal, timer, sites and snooze and swaps a visible reminder", async (context) => {
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  const goalId = readyToStart(f);
+  const started = f.controller.start({ goalId, intention: "Keep working", durationMinutes: 25 }).session;
+  f.clock.now += 1_000;
+  evidence(f);
+  const amber = f.overlay.shown.at(-1)!;
+  assert.equal(amber.experience, "amber");
+
+  f.controller.setExperience("grayscale_screen");
+  assert.deepEqual(f.overlay.hidden.at(-1), { nudgeId: amber.nudgeId, immediate: true });
+  const grayscale = f.overlay.shown.at(-1)!;
+  assert.equal(grayscale.experience, "grayscale_screen");
+  assert.notEqual(grayscale.nudgeId, amber.nudgeId);
+  const view = f.controller.view();
+  assert.deepEqual(view.session, started);
+  assert.equal(view.effect?.status, "preparing");
+  assert.equal(view.reminderVisible, true);
+
+  f.controller.snooze();
+  const snoozed = f.controller.view().session;
+  f.controller.setExperience("amber");
+  f.controller.savePreferences({ domains: ["video.example", "x.com"], durationMinutes: 25 });
+  evidence(f, "video.example", 2);
+  assert.equal(f.overlay.shown.length, 2, "switching style must not bypass snooze");
+  const after = f.controller.view().session;
+  if (after.status !== "active" || snoozed.status !== "active") assert.fail("session must remain active");
+  assert.equal(after.snoozedUntil, snoozed.snoozedUntil);
+  assert.equal(after.endsAt, snoozed.endsAt);
+  assert.deepEqual(after.domains, ["video.example", "x.com"]);
+  assert.deepEqual(f.observations, [1], "switching style must not restart observation");
+});
+
+test("reports grayscale only after the native first-frame report for that reminder", async (context) => {
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  f.controller.setExperience("grayscale_screen");
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  evidence(f);
+  const nudgeId = f.overlay.shown[0]!.nudgeId;
+  assert.equal(f.controller.view().effect?.status, "preparing");
+
+  for (const line of [effectLine("nudge-forged", "active"), JSON.stringify({ event: "effect", status: "shown", nudgeId, preview: false }),
+    JSON.stringify({ event: "effect", status: "active", nudgeId, preview: false, extra: 1 })]) {
+    f.overlay.handler!(line);
+  }
+  assert.equal(f.controller.view().effect?.status, "preparing");
+  f.overlay.handler!(effectLine(nudgeId, "active"));
+  assert.equal(f.controller.view().effect?.status, "showing");
+
+  f.controller.stop();
+  f.overlay.handler!(effectLine(nudgeId, "fallback", "capture_failed"));
+  const effect = f.controller.view().effect;
+  assert.deepEqual([effect?.status, effect?.visible], ["showing", false], "a late failure after hide is ignored");
+});
+
+test("a native capture failure is reported as an amber fallback with its reason", async (context) => {
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  f.controller.setExperience("grayscale_screen");
+  f.controller.saveGoal({ title: "Goal", why: "", currentFocus: "" });
+  f.controller.preview();
+  f.overlay.handler!(JSON.stringify({ event: "effect", status: "fallback", nudgeId: "preview-fixed", preview: true, reason: "no_frame" }));
+  const effect = f.controller.view().effect;
+  assert.deepEqual([effect?.status, effect?.fallbackReason, effect?.visible], ["fallback", "no_frame", true]);
+  f.overlay.handler!(JSON.stringify({ event: "effect", status: "active", nudgeId: "preview-fixed", preview: true }));
+  assert.equal(f.controller.view().effect?.status, "fallback");
+});
+
+test("without Screen Recording, grayscale falls back to amber and never prompts on its own", async (context) => {
+  const f = await fixture(context);
+  f.controller.setExperience("grayscale_screen");
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  evidence(f);
+  f.timers.tick();
+  assert.equal(f.overlay.shown[0]?.experience, "amber");
+  const view = f.controller.view();
+  assert.equal(view.detection, "ready", "browser readiness is separate from Screen Recording");
+  assert.deepEqual(view.screenCapture, { access: "not_granted", requested: false });
+  assert.deepEqual([view.effect?.status, view.effect?.fallbackReason], ["fallback", "permission_needed"]);
+  assert.equal(f.screenCapture.requests, 0);
+});
+
+test("requests Screen Recording once per launch and rechecks without prompting", async (context) => {
+  const f = await fixture(context);
+  assert.deepEqual(f.controller.requestScreenCapture().screenCapture, { access: "not_granted", requested: true });
+  f.controller.requestScreenCapture();
+  f.controller.refreshScreenCapture();
+  assert.equal(f.screenCapture.requests, 1, "the system prompt is requested at most once");
+
+  f.screenCapture.granted = true;
+  assert.equal(f.controller.refreshScreenCapture().screenCapture.access, "granted");
+  f.controller.setExperience("grayscale_screen");
+  f.controller.saveGoal({ title: "Goal", why: "", currentFocus: "" });
+  f.controller.preview();
+  assert.equal(f.overlay.shown.at(-1)?.experience, "grayscale_screen");
+});
+
+test("a native preflight refusal shows amber, records the reason and rechecks access", async (context) => {
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  f.controller.setExperience("grayscale_screen");
+  f.controller.saveGoal({ title: "Goal", why: "", currentFocus: "" });
+  // Access was revoked after the last check; the native preflight is the final authority.
+  f.overlay.result = "shown_fallback_permission";
+  f.overlay.onShow = () => { f.screenCapture.granted = false; };
+  f.controller.preview();
+  assert.equal(f.overlay.shown.at(-1)?.experience, "grayscale_screen");
+  const view = f.controller.view();
+  assert.equal(view.effect?.status, "fallback");
+  assert.equal(view.effect?.fallbackReason, "permission_needed");
+  assert.equal(view.screenCapture.access, "not_granted");
+  assert.equal(f.timers.callbacks.size, 1, "the fallback preview still expires");
+});
+
+test("a bridge without screen capture reports grayscale as unsupported", async (context) => {
+  const directory = await testDirectory(context);
+  const overlay = new FakeOverlay();
+  const store = new FocusStore(directory);
+  store.setExperience("grayscale_screen");
+  const controller = new FocusController({
+    store,
+    overlay,
+    setForegroundObservation: () => undefined,
+    capability: () => ({
+      privacyAccepted: true,
+      captureEnabled: true,
+      collectorAvailable: true,
+      accessibilityTrusted: true,
+      captureBrowserURLs: true
+    }),
+    createPreviewId: () => "preview-fixed"
+  });
+  context.after(() => controller.shutdown());
+  assert.equal(controller.view().screenCapture.access, "unsupported");
+  assert.throws(() => controller.requestScreenCapture(), /isn't available/);
+  controller.preview();
+  assert.equal(overlay.shown[0]?.experience, "amber");
+  assert.equal(controller.view().effect?.fallbackReason, "unsupported");
+});
+
+test("preview expiry hides grayscale and ignores its late first frame", async (context) => {
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  f.controller.setExperience("grayscale_screen");
+  f.controller.saveGoal({ title: "Goal", why: "", currentFocus: "" });
+  f.controller.preview();
+  f.clock.now += 8_000;
+  f.timers.tick();
+  assert.deepEqual(f.overlay.hidden.at(-1), { nudgeId: "preview-fixed", immediate: false });
+  assert.equal(f.timers.callbacks.size, 0, "no timer after the preview ends");
+  f.overlay.handler!(JSON.stringify({ event: "effect", status: "active", nudgeId: "preview-fixed", preview: true }));
+  const effect = f.controller.view().effect;
+  assert.deepEqual([effect?.status, effect?.visible], ["preparing", false]);
 });

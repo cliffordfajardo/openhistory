@@ -642,6 +642,7 @@ async function initialize(): Promise<void> {
   focus = new FocusController({
     store: new FocusStore(config.dataDirectory),
     overlay: collector.focusOverlay(),
+    screenCapture: collector.focusScreenCapture(),
     setForegroundObservation: (generation) => collector.setForegroundObservation(generation),
     capability: () => ({
       privacyAccepted: collector.currentSettings.privacyNoticeVersion >= CURRENT_PRIVACY_NOTICE_VERSION,
@@ -1029,6 +1030,15 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.snoozeFocus, () => focus!.snooze());
   handleTrustedIpc(IPC_CHANNELS.resumeFocus, () => focus!.resume());
   handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
+  handleTrustedIpc(IPC_CHANNELS.setFocusExperience, (_event, experience: unknown) =>
+    focus!.setExperience(experience));
+  handleTrustedIpc(IPC_CHANNELS.requestScreenCapture, () => focus!.requestScreenCapture());
+  handleTrustedIpc(IPC_CHANNELS.refreshScreenCapture, () => focus!.refreshScreenCapture());
+  handleTrustedIpc(IPC_CHANNELS.openScreenCaptureSettings, async () => {
+    await shell.openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+    );
+  });
   handleTrustedIpc(IPC_CHANNELS.getActivityDay, (_event, date: unknown) => {
     if (!isValidDateKey(date)) throw new Error("Invalid date");
     const current = settingsStore.load();

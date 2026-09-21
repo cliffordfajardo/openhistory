@@ -10,6 +10,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "n
 import { createRequire } from "node:module";
 import { arch as hostArchitecture } from "node:os";
 import { resolve } from "node:path";
+import toDesktopConfig from "../todesktop";
 
 const PRODUCT_NAME = "OpenHistory Focus";
 const BUNDLE_IDENTIFIER = "io.github.cliffordfajardo.openhistory-focus";
@@ -36,6 +37,7 @@ const applicationPaths = await packager({
   prune: true,
   appBundleId: BUNDLE_IDENTIFIER,
   appCategoryType: "public.app-category.productivity",
+  extendInfo: toDesktopConfig.mac.extendInfo,
   appVersion: packageJson.version,
   buildVersion: packageJson.version,
   icon: resolve(root, "resources", "OpenHistory.icns"),
@@ -138,6 +140,14 @@ function verifyApplication(applicationPath: string): void {
   ], { encoding: "utf8" }).trim();
   if (bundleIdentifier !== BUNDLE_IDENTIFIER) {
     throw new Error(`Unexpected local bundle identifier: ${bundleIdentifier}`);
+  }
+  const screenCaptureUsage = execFileSync("/usr/libexec/PlistBuddy", [
+    "-c",
+    "Print :NSScreenCaptureUsageDescription",
+    infoPlist
+  ], { encoding: "utf8" }).trim();
+  if (screenCaptureUsage !== toDesktopConfig.mac.extendInfo.NSScreenCaptureUsageDescription) {
+    throw new Error("Local package is missing the Screen Recording usage description");
   }
 
   for (const component of nativeComponents) {

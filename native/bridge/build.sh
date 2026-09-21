@@ -104,7 +104,14 @@ build_architecture() {
     native/collector/Sources/ActivityCollector/CollectorRuntime.swift \
     native/bridge/EmbeddedCollectorBridge.swift \
     native/bridge/FocusOverlay.swift \
+    native/bridge/FocusGrayscale.swift \
     "$@" \
+    -framework ScreenCaptureKit \
+    -framework CoreImage \
+    -framework CoreMedia \
+    -framework CoreVideo \
+    -framework Metal \
+    -framework QuartzCore \
     -Xlinker -install_name \
     -Xlinker @rpath/libOpenHistoryCollector.dylib \
     -o "${architecture_root}/libOpenHistoryCollector.dylib"
