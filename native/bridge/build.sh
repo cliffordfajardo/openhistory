@@ -105,6 +105,7 @@ build_architecture() {
     native/bridge/EmbeddedCollectorBridge.swift \
     native/bridge/FocusOverlay.swift \
     native/bridge/FocusGrayscale.swift \
+    native/bridge/FocusWindowGrayscale.swift \
     "$@" \
     -framework ScreenCaptureKit \
     -framework CoreImage \

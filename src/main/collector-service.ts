@@ -53,7 +53,9 @@ const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
   3: "no_display",
   4: "foreground_changed",
   5: "shown_fallback_permission",
-  6: "shown_fallback_unavailable"
+  6: "shown_fallback_unavailable",
+  7: "shown_fallback_window",
+  8: "shown_fallback_window_spans_displays"
 };
 
 export class CollectorService extends EventEmitter {

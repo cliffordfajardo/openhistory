@@ -86,9 +86,9 @@ private final class EmbeddedCollectorHost: @unchecked Sendable {
             writer: writer,
             configuration: configuration.collectorConfiguration
         )
-        collector.foregroundEvidenceHandler = { evidence in
+        collector.foregroundEvidenceHandler = { evidence, sampledWindow in
             MainActor.assumeIsolated {
-                FocusOverlayController.shared.foregroundEvidenceChanged(evidence)
+                FocusOverlayController.shared.foregroundEvidenceChanged(evidence, sampledWindow: sampledWindow)
             }
             if let packet = evidence.packet() { sink.send(packet) }
         }

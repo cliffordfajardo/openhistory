@@ -548,3 +548,87 @@ test("preview expiry hides grayscale and ignores its late first frame", async (c
   const effect = f.controller.view().effect;
   assert.deepEqual([effect?.status, effect?.visible], ["preparing", false]);
 });
+
+test("persists the grayscale window style and sends the matched site only with window reminders", async (context) => {
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  assert.equal(f.controller.setExperience("grayscale_window").preferences.experience, "grayscale_window");
+  const restarted = await fixture(context, f.directory);
+  assert.equal(restarted.controller.view().preferences.experience, "grayscale_window");
+
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  evidence(f, "m.video.example");
+  const request = f.overlay.shown.at(-1)!;
+  assert.equal(request.experience, "grayscale_window");
+  assert.equal(request.domain, "video.example", "the rule, not the observed host, is sent");
+  assert.equal(f.controller.view().effect?.status, "preparing");
+  f.overlay.handler!(effectLine(request.nudgeId, "active"));
+  assert.equal(f.controller.view().effect?.status, "showing");
+
+  f.controller.setExperience("grayscale_screen");
+  const screen = f.overlay.shown.at(-1)!;
+  assert.equal(screen.experience, "grayscale_screen");
+  assert.equal(screen.domain, undefined);
+  assert.deepEqual(f.observations, [1], "switching style must not restart observation");
+});
+
+test("window targeting failures show amber and keep their specific reason", async (context) => {
+  for (const [result, reason] of [
+    ["shown_fallback_window", "window_unavailable"],
+    ["shown_fallback_window_spans_displays", "window_spans_displays"]
+  ] as const) {
+    const f = await fixture(context);
+    f.screenCapture.granted = true;
+    f.controller.setExperience("grayscale_window");
+    f.overlay.result = result;
+    const goalId = readyToStart(f);
+    f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+    f.clock.now += 1_000;
+    evidence(f);
+    const view = f.controller.view();
+    assert.equal(view.reminderVisible, true, "the card still shows");
+    assert.deepEqual([view.effect?.status, view.effect?.fallbackReason], ["fallback", reason]);
+  }
+
+  const f = await fixture(context);
+  f.screenCapture.granted = true;
+  f.controller.setExperience("grayscale_window");
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  evidence(f);
+  const nudgeId = f.overlay.shown.at(-1)!.nudgeId;
+  f.overlay.handler!(effectLine(nudgeId, "fallback", "window_moved_somewhere"));
+  assert.equal(f.controller.view().effect?.status, "preparing", "unknown reasons are rejected");
+  f.overlay.handler!(effectLine(nudgeId, "active"));
+  f.overlay.handler!(effectLine(nudgeId, "fallback", "window_spans_displays"));
+  assert.deepEqual(
+    [f.controller.view().effect?.status, f.controller.view().effect?.fallbackReason],
+    ["fallback", "window_spans_displays"],
+    "a window dragged across displays later falls back"
+  );
+});
+
+test("a grayscale window preview targets this app without a site and never prompts", async (context) => {
+  const f = await fixture(context);
+  f.controller.setExperience("grayscale_window");
+  f.controller.saveGoal({ title: "Goal", why: "", currentFocus: "" });
+  f.controller.preview();
+  assert.equal(f.overlay.shown.at(-1)?.experience, "amber", "no Screen Recording means amber");
+  assert.equal(f.controller.view().effect?.fallbackReason, "permission_needed");
+  assert.equal(f.screenCapture.requests, 0);
+
+  f.clock.now += 8_000;
+  f.timers.tick();
+  f.screenCapture.granted = true;
+  f.controller.refreshScreenCapture();
+  f.overlay.shown = [];
+  f.controller.preview();
+  const request = f.overlay.shown.at(-1)!;
+  assert.deepEqual(
+    [request.experience, request.preview, request.domain, request.expectedProcessIdentifier],
+    ["grayscale_window", true, undefined, null]
+  );
+});

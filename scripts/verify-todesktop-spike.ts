@@ -72,6 +72,8 @@ const bridgeBuildSource = readFileSync(resolve(root, "native/bridge/build.sh"), 
 expect(bridgeBuildSource.includes("native/bridge/FocusOverlay.swift"), "native bridge must compile the Focus overlay");
 expect(bridgeBuildSource.includes("native/bridge/FocusGrayscale.swift") &&
   bridgeBuildSource.includes("-framework ScreenCaptureKit"), "native bridge must compile and link the grayscale reminder");
+expect(bridgeBuildSource.includes("native/bridge/FocusWindowGrayscale.swift"),
+  "native bridge must compile the window-only grayscale reminder");
 expect(/\bscreen\b/i.test(config.mac?.extendInfo?.NSScreenCaptureUsageDescription ?? ""),
   "ToDesktop Info.plist must explain Screen Recording use");
 expect(localPackagerSource.includes("extendInfo: toDesktopConfig.mac.extendInfo"),

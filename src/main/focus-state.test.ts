@@ -548,6 +548,69 @@ test("a grayscale preview expires after 8 s and ignores its late first frame", (
   );
 });
 
+test("grayscale window reminders carry the matched rule and wait for the native first frame", () => {
+  const harness = new Harness();
+  harness.state = initialFocusState(READY, "grayscale_window", "granted");
+  harness.start();
+  const [show] = shows(harness.browser(T0 + 1_000, "www.m.video.example"));
+  assert.equal(show?.request.experience, "grayscale_window");
+  assert.equal(show?.request.domain, "video.example");
+  assert.deepEqual(
+    [effectView(harness.state)?.requested, effectView(harness.state)?.status],
+    ["grayscale_window", "preparing"]
+  );
+  const nudgeId = show!.request.nudgeId;
+  harness.send({ type: "effect_status", now: T0 + 1_100, nudgeId, status: "active" });
+  assert.equal(effectView(harness.state)?.status, "showing");
+  harness.send({ type: "effect_status", now: T0 + 1_200, nudgeId, status: "fallback", reason: "window_unavailable" });
+  assert.deepEqual(
+    [effectView(harness.state)?.status, effectView(harness.state)?.fallbackReason],
+    ["fallback", "window_unavailable"]
+  );
+  assert.equal(hides(harness.browser(T0 + 1_500, "docs.example")).length, 1, "a safe site hides the reminder");
+});
+
+test("only window reminders carry a site, and previews never do", () => {
+  const screen = grayscaleHarness();
+  screen.start();
+  assert.equal(shows(screen.browser(T0 + 1_000))[0]?.request.domain, undefined);
+
+  const denied = new Harness();
+  denied.state = initialFocusState(READY, "grayscale_window", "not_granted");
+  denied.start();
+  const [amber] = shows(denied.browser(T0 + 1_000));
+  assert.deepEqual([amber?.request.experience, amber?.request.domain], ["amber", undefined]);
+  assert.equal(effectView(denied.state)?.fallbackReason, "permission_needed");
+
+  const preview = new Harness();
+  preview.state = initialFocusState(READY, "grayscale_window", "granted");
+  const [shown] = shows(preview.send({ type: "preview", now: T0, previewId: "preview-1", copy: { title: "x", message: "" } }));
+  assert.deepEqual(
+    [shown?.request.experience, shown?.request.domain, shown?.request.expectedProcessIdentifier],
+    ["grayscale_window", undefined, null]
+  );
+});
+
+test("switching between window and screen grayscale replaces the reminder without touching the session", () => {
+  const harness = new Harness();
+  harness.state = initialFocusState(READY, "grayscale_window", "granted");
+  harness.start();
+  const first = shows(harness.browser(T0 + 1_000))[0]!;
+  const session = harness.state.session;
+  const toScreen = harness.send({ type: "experience_changed", now: T0 + 1_100, experience: "grayscale_screen" });
+  assert.deepEqual(hides(toScreen), [{ type: "hide", nudgeId: first.request.nudgeId, immediate: true }]);
+  const screen = shows(toScreen)[0]!;
+  assert.deepEqual([screen.request.experience, screen.request.domain], ["grayscale_screen", undefined]);
+
+  const toWindow = harness.send({ type: "experience_changed", now: T0 + 1_200, experience: "grayscale_window" });
+  assert.deepEqual(hides(toWindow), [{ type: "hide", nudgeId: screen.request.nudgeId, immediate: true }]);
+  const window = shows(toWindow)[0]!;
+  assert.deepEqual([window.request.experience, window.request.domain], ["grayscale_window", "video.example"]);
+  assert.deepEqual(harness.state.session, session);
+  assert.equal(effectView(harness.state)?.status, "preparing");
+  assert.equal(harness.send({ type: "experience_changed", now: T0 + 1_300, experience: "grayscale_window" }).length, 0);
+});
+
 test("changing the style ends a visible preview", () => {
   const harness = grayscaleHarness();
   harness.send({ type: "preview", now: T0, previewId: "preview-1", copy: { title: "x", message: "" } });
@@ -555,4 +618,21 @@ test("changing the style ends a visible preview", () => {
   assert.deepEqual(hides(effects), [{ type: "hide", nudgeId: "preview-1", immediate: true }]);
   assert.equal(harness.state.preview, undefined);
   assert.equal(effectView(harness.state)?.visible, false);
+});
+
+test("window grayscale follows a different listed site without losing the session", () => {
+  const harness = new Harness();
+  harness.state = initialFocusState(READY, "grayscale_window", "granted");
+  harness.start();
+  const first = shows(harness.browser(T0 + 1_000, "video.example"))[0]!;
+  const session = harness.state.session;
+  const changed = harness.browser(T0 + 1_250, "social.example");
+  assert.deepEqual(hides(changed), [{ type: "hide", nudgeId: first.request.nudgeId, immediate: true }]);
+  const replacement = shows(changed)[0]!;
+  assert.equal(replacement.request.experience, "grayscale_window");
+  assert.equal(replacement.request.domain, "social.example");
+  assert.notEqual(replacement.request.nudgeId, first.request.nudgeId);
+  assert.deepEqual(harness.state.session, session);
+  assert.equal(shows(harness.browser(T0 + 1_500, "m.social.example")).length, 0);
+  assert.equal(hides(harness.browser(T0 + 1_750, "safe.example")).length, 1);
 });

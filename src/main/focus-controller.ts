@@ -35,12 +35,15 @@ import type { FocusStore } from "./focus-store";
 
 /**
  * `shown_fallback_*`: the card and amber edge are on screen, but grayscale was requested and the
- * native side could not start it (no Screen Recording access, or no capture/GPU support).
+ * native side could not start it (no Screen Recording access, no capture/GPU support, or no
+ * exactly matched distracting window on a single display).
  */
 export type FocusOverlayShowResult =
   | "shown"
   | "shown_fallback_permission"
   | "shown_fallback_unavailable"
+  | "shown_fallback_window"
+  | "shown_fallback_window_spans_displays"
   | "invalid_request"
   | "not_main_thread"
   | "no_display"
@@ -55,6 +58,7 @@ export interface FocusOverlayRequest {
   expectedProcessIdentifier: number | null;
   preview: boolean;
   experience: FocusExperience;
+  domain?: string;
 }
 
 export interface FocusOverlayBinding {
@@ -99,12 +103,21 @@ const EffectStatusSchema = z.object({
   status: z.enum(["active", "fallback"]),
   nudgeId: z.string().min(1).max(100),
   preview: z.boolean(),
-  reason: z.enum(["permission_needed", "unsupported", "capture_failed", "no_frame", "display_unavailable"])
-    .optional()
+  reason: z.enum([
+    "permission_needed",
+    "unsupported",
+    "capture_failed",
+    "no_frame",
+    "display_unavailable",
+    "window_unavailable",
+    "window_spans_displays"
+  ]).optional()
 }).strict();
 const SHOW_FALLBACK_REASONS: Partial<Record<FocusOverlayShowResult, FocusEffectFallbackReason>> = {
   shown_fallback_permission: "permission_needed",
-  shown_fallback_unavailable: "unsupported"
+  shown_fallback_unavailable: "unsupported",
+  shown_fallback_window: "window_unavailable",
+  shown_fallback_window_spans_displays: "window_spans_displays"
 };
 
 export class FocusController extends EventEmitter {

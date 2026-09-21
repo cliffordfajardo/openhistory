@@ -254,6 +254,28 @@ test("exposes Screen Recording access only when the bridge supports grayscale", 
     preview: true,
     experience: "grayscale_screen"
   }), "shown_fallback_permission");
+
+  const windowRequests: string[] = [];
+  for (const [code, result] of [[7, "shown_fallback_window"], [8, "shown_fallback_window_spans_displays"]] as const) {
+    const windowService = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, Object.assign(new FakeNativeCollector(), {
+      ...overlayFunctions,
+      showFocusOverlay: (json: string) => {
+        windowRequests.push(json);
+        return code;
+      }
+    }));
+    assert.equal(windowService.focusOverlay()?.show({
+      nudgeId: "nudge-1",
+      sessionId: "session-1",
+      title: "Title",
+      message: "",
+      expectedProcessIdentifier: 501,
+      preview: false,
+      experience: "grayscale_window",
+      domain: "video.example"
+    }), result);
+  }
+  assert.equal((JSON.parse(windowRequests[0]!) as { domain: string }).domain, "video.example");
 });
 
 async function testDirectory(context: TestContext): Promise<string> {

@@ -73,6 +73,10 @@ const EXPERIENCE_COPY: Record<FocusExperience, { label: string; detail: string }
     label: "Amber edge",
     detail: "A soft amber glow around the display with the distracting window. No extra permission."
   },
+  grayscale_window: {
+    label: "Grayscale window",
+    detail: "The distracting window’s area turns gray while the reminder shows. The rest of the display stays in color. Needs Screen Recording."
+  },
   grayscale_screen: {
     label: "Grayscale screen",
     detail: "The entire display with the distracting window turns gray while the reminder shows. Other displays stay in color. Needs Screen Recording."
@@ -84,7 +88,9 @@ const FALLBACK_COPY: Record<FocusEffectFallbackReason, string> = {
   unsupported: "this build or Mac can’t capture the screen",
   capture_failed: "screen capture stopped or couldn’t start",
   no_frame: "no screen image arrived in time",
-  display_unavailable: "the display changed or couldn’t be found"
+  display_unavailable: "the display changed or couldn’t be found",
+  window_unavailable: "the distracting window couldn’t be matched or followed exactly",
+  window_spans_displays: "the window is on more than one display"
 };
 
 function effectStatusCopy(effect: FocusEffectState): string | undefined {
@@ -95,7 +101,7 @@ function effectStatusCopy(effect: FocusEffectState): string | undefined {
       ? `Grayscale didn’t start (${reason}), so this ${subject} uses the amber edge.`
       : `The last grayscale ${subject} used the amber edge instead: ${reason}.`;
   }
-  if (!effect.visible || effect.requested !== "grayscale_screen") return undefined;
+  if (!effect.visible || effect.requested === "amber") return undefined;
   return effect.status === "preparing"
     ? `Starting grayscale for this ${subject}…`
     : `Grayscale is showing for this ${subject}.`;
@@ -383,8 +389,9 @@ async function previewReminder(setState: SetAppState): Promise<string> {
     return next;
   });
   if (failure) return failure;
-  return requested === "amber"
-    ? "Preview shown on this display for about 8 seconds."
+  if (requested === "amber") return "Preview shown on this display for about 8 seconds.";
+  return requested === "grayscale_window"
+    ? "Preview shown for about 8 seconds. This window stands in for the distracting one. Grayscale status is under Reminder style."
     : "Preview card shown on this display for about 8 seconds. Grayscale status is under Reminder style.";
 }
 
@@ -426,7 +433,7 @@ function ReminderStyleCard({
       <div className="focus-card-heading">
         <div>
           <strong>Reminder style</strong>
-          <span>Both styles show the same reminder card with Snooze and Dismiss. Changes apply right away, even during a session.</span>
+          <span>Every style shows the same reminder card with Snooze and Dismiss. Changes apply right away, even during a session.</span>
         </div>
       </div>
       <div className="focus-style-options" role="radiogroup" aria-label="Reminder style">
@@ -445,7 +452,7 @@ function ReminderStyleCard({
           </button>
         ))}
       </div>
-      {experience === "grayscale_screen" ? (
+      {experience !== "amber" ? (
         <div className="focus-style-permission">
           <div className="status-line">
             <span className={`status-light ${access === "granted" ? "running" : "failed"}`} />

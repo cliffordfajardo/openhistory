@@ -88,6 +88,9 @@ test("reads files saved before reminder styles as amber without losing goals or 
   assert.deepEqual(reloaded.preferences.domains, ["video.example"]);
   assert.equal(reloaded.goals[0]?.title, "Kept");
   assert.equal(reloaded.version, 1);
+
+  store.setExperience("grayscale_window");
+  assert.equal(new FocusStore(directory).load().preferences.experience, "grayscale_window");
 });
 
 test("never stores an active session", async (context) => {

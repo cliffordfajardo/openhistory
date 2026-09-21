@@ -16,17 +16,23 @@ struct FocusOverlayRequest: Decodable {
     let message: String
     let expectedProcessIdentifier: Int32?
     let preview: Bool
-    /// "amber" (the default when absent) or "grayscale_screen".
+    /// "amber" (the default when absent), "grayscale_window" or "grayscale_screen".
     let experience: String?
+    /// The listed site rule a window-only reminder is for; its window is grayed only while fresh
+    /// foreground evidence from that window matches it.
+    let domain: String?
 
     var wantsGrayscale: Bool { experience == "grayscale_screen" }
+    var wantsWindowGrayscale: Bool { experience == "grayscale_window" }
 
     var isValid: Bool {
         !nudgeId.isEmpty && nudgeId.count <= 100 &&
             (sessionId?.count ?? 0) <= 100 &&
             !title.isEmpty && title.count <= 300 &&
             message.count <= 600 &&
-            (experience == nil || experience == "amber" || experience == "grayscale_screen") &&
+            (experience == nil || ["amber", "grayscale_window", "grayscale_screen"].contains(experience)) &&
+            (domain?.count ?? 0) <= 253 &&
+            (preview || !wantsWindowGrayscale || domain?.isEmpty == false) &&
             (preview || (expectedProcessIdentifier ?? 0) > 0)
     }
 }
@@ -41,6 +47,10 @@ enum FocusOverlayShowResult: Int32 {
     case shownFallbackPermission = 5
     /// Card and amber edge shown because grayscale capture isn't supported here.
     case shownFallbackUnavailable = 6
+    /// Card and amber edge shown because the distracting window couldn't be matched exactly.
+    case shownFallbackWindow = 7
+    /// Card and amber edge shown because the distracting window covers more than one display.
+    case shownFallbackWindowSpansDisplays = 8
 }
 
 struct FocusOverlayAppearance: Equatable {
@@ -375,6 +385,7 @@ final class FocusOverlayController: NSObject {
         }
 
         installObserversIfNeeded()
+        FocusWindowGrayscaleController.shared.stop()
         FocusGrayscaleController.shared.stop()
         let (glow, card, glowView, cardView) = ensurePanels()
         presentationToken &+= 1
@@ -423,6 +434,23 @@ final class FocusOverlayController: NSObject {
             } else {
                 result = .shownFallbackUnavailable
             }
+        } else if request.wantsWindowGrayscale {
+            let nudgeId = request.nudgeId
+            let failure = FocusWindowGrayscaleController.shared.start(
+                processIdentifier: request.preview ? nil : request.expectedProcessIdentifier,
+                domainRule: request.domain,
+                preview: request.preview,
+                onEvent: { event in
+                    FocusOverlayController.shared.grayscaleEvent(event, nudgeId: nudgeId)
+                }
+            )
+            switch failure {
+            case nil: grayscaleStarted = true
+            case .permissionNeeded?: result = .shownFallbackPermission
+            case .windowUnavailable?: result = .shownFallbackWindow
+            case .windowSpansDisplays?: result = .shownFallbackWindowSpansDisplays
+            case _?: result = .shownFallbackUnavailable
+            }
         }
         if grayscaleStarted {
             glow.alphaValue = 0
@@ -470,6 +498,7 @@ final class FocusOverlayController: NSObject {
     func hide(nudgeId: String?, immediate: Bool) {
         guard let request = current else { return }
         if let nudgeId, !nudgeId.isEmpty, nudgeId != request.nudgeId { return }
+        FocusWindowGrayscaleController.shared.stop()
         FocusGrayscaleController.shared.stop()
         current = nil
         currentDisplay = nil
@@ -501,11 +530,13 @@ final class FocusOverlayController: NSObject {
 
     /// Called from the collector's existing sampler. A different process or a non-browser state
     /// means the reminder no longer describes what is on screen.
-    func foregroundEvidenceChanged(_ evidence: ForegroundEvidence) {
+    func foregroundEvidenceChanged(_ evidence: ForegroundEvidence, sampledWindow: AXUIElement?) {
         guard let request = current, !request.preview else { return }
         if evidence.kind != .browser || evidence.processIdentifier != request.expectedProcessIdentifier {
             hide(nudgeId: request.nudgeId, immediate: true)
             report(action: "hidden", request: request, reason: "foreground_changed")
+        } else if request.wantsWindowGrayscale {
+            FocusWindowGrayscaleController.shared.foregroundEvidence(evidence, sampledWindow: sampledWindow)
         }
     }
 
@@ -519,6 +550,7 @@ final class FocusOverlayController: NSObject {
 
     func shutdown() {
         hide(nudgeId: nil, immediate: true)
+        FocusWindowGrayscaleController.shared.stop()
         FocusGrayscaleController.shared.stop()
         if observersInstalled {
             NotificationCenter.default.removeObserver(self)
@@ -659,18 +691,30 @@ final class FocusOverlayController: NSObject {
             return
         }
         layout(glow: glow, card: card, glowView: glowView, cardView: cardView, on: screen)
-        FocusGrayscaleController.shared.displayChanged(to: screen)
+        if FocusWindowGrayscaleController.shared.isActive {
+            FocusWindowGrayscaleController.shared.geometryMayHaveChanged()
+        } else {
+            FocusGrayscaleController.shared.displayChanged(to: screen)
+        }
     }
 
     @objc private func foregroundApplicationChanged() {
-        guard let request = current, !request.preview,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier != request.expectedProcessIdentifier else { return }
+        guard let request = current else { return }
+        if request.preview {
+            FocusWindowGrayscaleController.shared.applicationActivationChanged()
+            return
+        }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier != request.expectedProcessIdentifier else { return }
         hide(nudgeId: request.nudgeId, immediate: true)
         report(action: "hidden", request: request, reason: "foreground_changed")
     }
 
     @objc private func activeSpaceChanged() {
-        guard let request = current, !request.preview else { return }
+        guard let request = current else { return }
+        if request.preview {
+            FocusWindowGrayscaleController.shared.geometryMayHaveChanged()
+            return
+        }
         hide(nudgeId: request.nudgeId, immediate: true)
         report(action: "hidden", request: request, reason: "space_changed")
     }

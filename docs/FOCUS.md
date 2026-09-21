@@ -8,8 +8,9 @@ adds a calm focus companion on top of OpenHistory's private, local activity coll
   minutes, and list the sites that tend to pull you away.
 - **A gentle reminder**: during a session, if a listed site is the front browser tab, a thin warm
   amber edge fades in around that display with a small reminder card near the top: your goal and
-  intention, plus **Snooze 5 min** and **Dismiss**. Optionally, the **Grayscale screen** style
-  shows that whole display in gray instead of the amber edge (see [Reminder styles](#reminder-styles)).
+  intention, plus **Snooze 5 min** and **Dismiss**. Optionally, the **Grayscale window** style
+  shows only the distracting window in gray, and the **Grayscale screen** style shows that whole
+  display in gray, instead of the amber edge (see [Reminder styles](#reminder-styles)).
 - **An Activity timeline**: a model-free, chronological view of each recorded day.
 
 Focus **nudges; it never blocks**. Every site stays reachable, and nothing is closed, hidden or
@@ -128,6 +129,10 @@ while the session's goal, timer, site list, snooze and dismiss quiet period are 
 
 - **Amber edge** (default, and the style for files saved before styles existed): the warm edge
   described above. It needs no permission beyond Accessibility.
+- **Grayscale window**: while a reminder shows, only the distracting browser window is shown in
+  grayscale; the rest of the display, other windows and other displays stay in color. For a
+  preview, the Focus window itself stands in for the distracting window. It needs macOS Screen
+  Recording access (the same permission as Grayscale screen).
 - **Grayscale screen**: while a reminder or preview is showing, the **entire display** that holds
   the distracting window (for a preview, the display with the Focus window) is shown in grayscale.
   Other displays stay in color. The reminder card, Snooze and Dismiss are the same; the card and
@@ -143,15 +148,49 @@ the gray image). The panel appears only after the first captured frame is render
 the Focus page says "Starting grayscale" rather than claiming it is shown. No system display
 setting, private API or Shortcut is used, and nothing changes after the app quits or crashes.
 
+How grayscale window works (`FocusWindowGrayscale.swift`): this is an overlay built from a public
+screen capture, not a system filter. The target is the browser's focused window from Accessibility
+(position and size, not minimized), matched to exactly one on-screen, normal-level window of the
+same process with the same bounds in the window server's list. No match, several matches, or a
+window on more than one display is not guessed at. The capture uses the same display filter as
+Grayscale screen (the composited display without this app's panels, so menus and windows in front
+are captured as they appear) with a `sourceRect` cropped to that window, sized in the display's
+pixels. It never captures a single window on its own, which could redraw hidden content over
+menus or other windows. Coordinates are converted between the window server's top-left origin
+and AppKit's bottom-left origin per display, including displays left of or above the main one
+and Retina scale. A window partly off every display is cropped to its visible part.
+
+Following the window:
+
+- The gray image appears only after the first captured frame **and** the next foreground check
+  from the existing 0.75 s sampler confirms that the same window still shows the reminder's site.
+  If no confirmation arrives within 2 s, the reminder uses the amber edge.
+- Moving or resizing the window hides the gray image at once (Accessibility move/resize
+  notifications for that window only). About 0.2 s after the window stops moving, its bounds are
+  verified again and capture restarts for the new rectangle. Unchanged bounds don't restart it.
+- Switching to another window of the same browser, minimizing or closing the window hides the
+  gray image at once. It returns only when a new foreground check, read from the newly focused
+  window, shows the same listed site; a safe site in that window never turns gray. A different
+  listed site in the new window keeps the reminder but switches it to the amber edge.
+- App switches, Space and full-screen transitions hide the reminder as before. A display
+  change hides the gray image and verifies the bounds again. In a preview, the gray image hides
+  while another app is in front and returns when the Focus window is in front again. A preview
+  window moved to another Space falls back to amber.
+- The cooldown, snooze, dismiss quiet period, 8 s preview and stop/quit cleanup are unchanged.
+
 When grayscale can't run, the reminder shows the amber edge instead and the Focus page says why:
 Screen Recording not allowed, capture unsupported, capture stopped (including revoking access
-while it runs), no frame within 4 s, or the display changed. Hiding a reminder removes the gray
-panel synchronously and then stops capture, so a late capture callback can't bring it back.
+while it runs), no frame within 4 s, the display changed, the distracting window couldn't be
+matched or followed exactly, or the window is on more than one display. The whole display is
+never grayed in place of a window. A fallback lasts until that reminder hides. Hiding a reminder
+removes the gray panel synchronously and then stops capture, so a late capture callback can't
+bring it back.
 
 ## Permissions
 
 - **Accessibility** powers OpenHistory's collector and every reminder.
-- **Screen Recording** is used only by the optional Grayscale screen style. The amber style needs
+- **Screen Recording** is used only by the optional Grayscale window and Grayscale screen styles;
+  one grant covers both. The amber style needs
   no Screen Recording: it picks its display from the front window's Accessibility geometry,
   falling back to on-screen window bounds for that process (bounds are available without Screen
   Recording). Access is checked without prompting. **Grant Screen Recording** asks macOS once per
@@ -189,6 +228,9 @@ panel synchronously and then stops capture, so a late capture callback can't bri
 - **Grayscale frames are transient.** They exist only in ScreenCaptureKit/GPU memory while a
   grayscale reminder shows. They are never written to disk, logged, copied to JavaScript,
   analyzed or sent anywhere, and the capture stream and panel are released when it hides.
+  Grayscale window reads only window geometry (bounds, window number, owner process) to find the
+  window; the listed site rule it compares against is passed in memory with the reminder and
+  never stored.
 - **Diagnostics** include counts and states only (number of goals and sites, whether a session is
   active), never goal text or site names.
 
@@ -233,8 +275,10 @@ CollectorService (Node): validate + privacy ──► FocusController ◄── 
 Data shapes (`src/shared/focus.ts`):
 
 - `Goal { id, title, why, currentFocus }`,
-  `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_screen" }`.
+  `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" | "grayscale_screen" }`.
   `focus.json` stays at version 1; a missing `experience` reads as `"amber"`.
+- A window-only reminder request also carries `domain`, the listed rule that matched, so the
+  native side can confirm the focused window against later foreground evidence.
 - The view also reports `screenCapture { access, requested }` separately from browser detection,
   and `effect { requested, status: preparing | showing | fallback, fallbackReason, visible }` for
   the latest reminder or preview. Native effect reports carry the nudge ID and are ignored unless
@@ -291,6 +335,17 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   reminder requests are rejected and that a reminder for a non-frontmost process is refused before
   any window is created. Only event kinds and reasons are printed.
 - `sample-app-resources.sh` reads `ps` statistics only. Run it idle and during a session.
+- `npm run test:grayscale-gpu` renders synthetic pixels through the production GPU renderer and
+  checks grayscale and orientation. Window geometry (Retina crops, negative display origins,
+  clipped and spanning windows, ambiguous matches) and the follow/retarget rules are pure Swift
+  in `ActivityCore/FocusWindowTargeting.swift`, covered by `npm run test:native`.
+- Manual check for Grayscale window (packaged app, Screen Recording granted): choose
+  **Grayscale window**, press **Test reminder** and confirm only the Focus window turns gray.
+  Drag it: the gray image should disappear while moving and return in place. During a session,
+  open a listed site in one browser window and an unlisted site in another; only the listed
+  window should turn gray, and switching to the other window should remove the gray image at
+  once. Drag the listed window across two displays; the reminder should switch to amber with
+  "the window is on more than one display".
 
 Automated coverage includes domain anti-spoofing, malformed IPC and persistence, session expiry,
 snooze, dismiss, cooldown, re-entry, stale and out-of-order evidence, stale native actions,
@@ -313,6 +368,19 @@ gap labels, truncation limits, path traversal and symlinked files.
   grayscale reminder is already showing is hidden behind the gray image until the next reminder.
   A resolution change during a grayscale reminder switches it to the amber edge. Motion under the
   gray image is limited to 30 fps.
+- Grayscale window has not been verified live on any browser or macOS version yet. While a window
+  moves or resizes it stays in color, and after it stops the gray image returns once capture
+  restarts. A window spanning two displays, a window whose Accessibility bounds don't match
+  exactly one on-screen window (for example two windows stacked at the same bounds) use the
+  amber edge. Switching to another listed site replaces the window reminder with that site's
+  rule while preserving the session. Chrome-installed web
+  apps are expected to work when their window belongs to the process Focus observes; otherwise
+  they fall back to amber and site detection itself is unaffected. Window rules are
+  compared as the matched listed site and its subdomains; an internationalized address that the
+  browser reports in a different form than the rule falls back to amber.
+- Grayscale is a captured image over a display or rectangular window area, not an OS color filter.
+  Protected video may be blank, fast motion may lag, and overlapping content inside the window
+  rectangle is also grayed. Popups extending outside that rectangle may remain in color.
 - Idle time is not recorded in the timeline; only live idle suppresses reminders.
 - A day file written under a different time zone is shown under the date in its file name.
 - Chat still requires a cloud model.

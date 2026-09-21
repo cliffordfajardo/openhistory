@@ -5,7 +5,7 @@ The fork includes upstream main at `daf7b073ce93673d0453d9f69b7435224c4bf49c`.
 
 ## Automated checks
 
-- `npm test` passes 267 TypeScript tests, 30 Swift tests, inference-preservation checks for six model paths, and distribution checks.
+- `npm test` passes 293 TypeScript tests, 38 Swift tests, inference-preservation checks for six model paths, and distribution checks.
 - Real N-API smoke verifies collector callbacks, generation-tagged foreground evidence, malformed request rejection, callback cleanup, and no evidence persistence. The command-line test identity lacks Accessibility, so this is not a browser-permission test.
 - Host Electron/native packaging succeeds. The local build is signed with the developer's installed Apple Development identity and passes strict signature verification. It is not notarized or a Developer ID release.
 - The public-repository check and `git diff --check` pass. No activity files, local credentials, dependency symlinks or internal review scratch files are included.
@@ -28,12 +28,19 @@ An interactive 60-second interval in the first standalone build averaged 26.91% 
 
 ## Remaining limits
 
-- Grayscale screen: 286 TypeScript tests, 25 Swift collector tests, native bridge smoke,
+- Grayscale screen: 286 TypeScript tests, 30 Swift tests, native bridge smoke,
   distribution checks and the signed host package passed. `npm run test:grayscale-gpu` renders
   synthetic color quadrants through the production GPU renderer and verifies grayscale,
   orientation and scaling at two sizes without screen access. The installed app preserves goals
   and sites and correctly reports amber fallback when Screen Recording is denied. Live capture,
   first-frame presentation, revocation and resource use still need permission-enabled validation.
+- Grayscale window: reducer, controller, persistence and pure Swift geometry/retargeting tests
+  pass, along with the native bridge build and synthetic GPU checks. The final signed package
+  launches with all three styles. Window preview reports permission fallback correctly, and a
+  live session retains its end time when switching to screen mode; the test session was stopped.
+  No permission-enabled capture verification has been done: window matching,
+  cropped capture, following moves and resizes, same-browser window switches, multiple displays,
+  Chrome-installed web apps and Safari all still need permission-enabled manual validation.
 - Browser detection depends on accessible HTTP(S) addresses. Safari and the other recognized browsers have not received the same live validation as Chrome. Private-window detection is heuristic, not a universal guarantee.
 - App-switch dismissal uses a native activation notification. Same-app tab/window changes wait for the existing 0.75-second sampler; unresponsive accessibility APIs can delay it.
 - Multiple displays, final-build fullscreen/Spaces behavior, physical keyboard delivery and OS-wide Reduce Motion/Transparency settings have not all been exercised on this machine. The native implementation handles those settings and uses nonactivating panels, but this is not a universal platform guarantee.
@@ -43,3 +50,5 @@ An interactive 60-second interval in the first standalone build averaged 26.91% 
 ## Independent review
 
 Claude Opus reviewed privacy, native lifecycle, IPC and packaging. It found an overnight restart-state bug and a day-navigation response race, both fixed. GPT-5.6 Sol reproduced the short-cooldown dismissal race and a duplicate-callback edge; both now have regression coverage. Comment review preserved platform constraints and removed implementation narration.
+
+Grayscale review fixed a shared mutable filter race, first-frame completion handling, vertical image orientation, stale site-edit preferences, and sampled-window identity during same-browser switches. Switching between different listed sites now replaces the window reminder without resetting the session.

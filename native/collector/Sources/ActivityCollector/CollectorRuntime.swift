@@ -117,7 +117,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
     private var lastSnapshotAt: [String: Date] = [:]
     private var foregroundGeneration: UInt64 = 0
     private var foregroundSequence: UInt64 = 0
-    var foregroundEvidenceHandler: ((ForegroundEvidence) -> Void)?
+    var foregroundEvidenceHandler: ((ForegroundEvidence, AXUIElement?) -> Void)?
     /// Lets the embedding host exclude clicks on its own reminder surface from pointer capture.
     var pointerExclusion: ((CGPoint) -> Bool)?
 
@@ -425,7 +425,11 @@ final class ApplicationActivityCollector: @unchecked Sendable {
             rawURL: rawBrowserURL,
             windowTitle: privacyWindowTitle
         )
-        emitForegroundEvidence(sampledApplication: application, browserContext: browserContext)
+        emitForegroundEvidence(
+            sampledApplication: application,
+            browserContext: browserContext,
+            sampledWindow: focusedWindow
+        )
         if browserContext.isProtected {
             discardPendingTextEdit()
             return
@@ -607,7 +611,8 @@ final class ApplicationActivityCollector: @unchecked Sendable {
 
     private func emitForegroundEvidence(
         sampledApplication: NSRunningApplication?,
-        browserContext: BrowserContext?
+        browserContext: BrowserContext?,
+        sampledWindow: AXUIElement? = nil
     ) {
         guard foregroundGeneration > 0, let handler = foregroundEvidenceHandler else { return }
         let frontmost = workspace.frontmostApplication
@@ -636,7 +641,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
         )
         let decision = ForegroundEvidenceClassifier.classify(context)
         foregroundSequence &+= 1
-        handler(ForegroundEvidence(
+        let evidence = ForegroundEvidence(
             generation: foregroundGeneration,
             sequence: foregroundSequence,
             observedAt: Date(),
@@ -645,7 +650,8 @@ final class ApplicationActivityCollector: @unchecked Sendable {
             processIdentifier: frontmost?.processIdentifier,
             bundleIdentifier: decision.kind == .browser ? bundleIdentifier : nil,
             domain: decision.domain
-        ))
+        )
+        handler(evidence, sampledIsFrontmost ? sampledWindow : nil)
     }
 
     private func enterProtectedBrowserContext(processIdentifier: pid_t) {

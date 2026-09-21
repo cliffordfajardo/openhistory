@@ -125,6 +125,8 @@ export type FocusEffect =
       expectedProcessIdentifier: number | null;
       preview: boolean;
       experience: FocusExperience;
+      /** The matched site rule, sent only for a window-only grayscale reminder. */
+      domain?: string;
     };
   }
   | { type: "hide"; nudgeId: string; immediate: boolean };
@@ -295,7 +297,7 @@ function beginEffect(state: FocusMachineState, nudgeId: string, preview: boolean
     return "amber";
   }
   state.effect = { ...base, status: "preparing", fallbackReason: null };
-  return "grayscale_screen";
+  return state.experience;
 }
 
 function applyEffectStatus(
@@ -303,7 +305,7 @@ function applyEffectStatus(
   input: Extract<FocusInput, { type: "effect_status" }>
 ): void {
   const effect = state.effect;
-  if (!effect?.visible || effect.nudgeId !== input.nudgeId || effect.requested !== "grayscale_screen") return;
+  if (!effect?.visible || effect.nudgeId !== input.nudgeId || effect.requested === "amber") return;
   if (input.status === "active" && effect.status === "preparing") {
     state.effect = { ...effect, status: "showing", updatedAt: input.now };
   } else if (input.status === "fallback" && effect.status !== "fallback") {
@@ -384,9 +386,15 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
     const nudge = state.nudge;
     const stillMatching = evidence?.kind === "browser" &&
       evidence.processIdentifier === nudge.processIdentifier && matchedDomain !== undefined;
-    if (!ready || !stillMatching) effects.push(hideNudge(state, true));
-    else if (session.snoozedUntil !== null) effects.push(hideNudge(state, false));
-    return;
+    if (ready && stillMatching && session.snoozedUntil === null &&
+        state.experience === "grayscale_window" && matchedDomain !== nudge.domain) {
+      effects.push(hideNudge(state, true));
+      state.restyling = true;
+    } else {
+      if (!ready || !stillMatching) effects.push(hideNudge(state, true));
+      else if (session.snoozedUntil !== null) effects.push(hideNudge(state, false));
+      return;
+    }
   }
 
   if (!ready || evidence?.kind !== "browser" || !matchedDomain) return;
@@ -408,6 +416,7 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
   state.nudge = nudge;
   state.lastNudgeId = nudge.id;
   state.lastNudgeAt = now;
+  const experience = beginEffect(state, nudge.id, false, now);
   effects.push({
     type: "show",
     request: {
@@ -416,7 +425,8 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
       ...reminderCopy(session.goal, session.intention),
       expectedProcessIdentifier: nudge.processIdentifier,
       preview: false,
-      experience: beginEffect(state, nudge.id, false, now)
+      experience,
+      ...(experience === "grayscale_window" ? { domain: nudge.domain } : {})
     }
   });
 }

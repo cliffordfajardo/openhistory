@@ -43,10 +43,11 @@ export interface GoalDraft {
 }
 
 /**
- * How a reminder looks. `amber` draws a warm edge around the display. `grayscale_screen` shows the
- * entire display that holds the distracting window in grayscale; other displays are unchanged.
+ * How a reminder looks. `amber` draws a warm edge around the display. `grayscale_window` shows
+ * only the distracting window in grayscale. `grayscale_screen` shows the entire display that holds
+ * the distracting window in grayscale; other displays are unchanged.
  */
-export const FOCUS_EXPERIENCES = ["amber", "grayscale_screen"] as const;
+export const FOCUS_EXPERIENCES = ["amber", "grayscale_window", "grayscale_screen"] as const;
 export type FocusExperience = (typeof FOCUS_EXPERIENCES)[number];
 
 export interface FocusPreferences {
@@ -70,7 +71,9 @@ export type FocusEffectFallbackReason =
   | "unsupported"
   | "capture_failed"
   | "no_frame"
-  | "display_unavailable";
+  | "display_unavailable"
+  | "window_unavailable"
+  | "window_spans_displays";
 
 /**
  * The visual effect of the latest reminder or preview. Grayscale stays "preparing" until the

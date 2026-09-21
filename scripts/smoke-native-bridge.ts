@@ -48,6 +48,19 @@ try {
     preview: false,
     experience: "grayscale_screen"
   })), 4, "a grayscale reminder for a process that is not frontmost must be refused before capture");
+  const windowRequest = {
+    nudgeId: "smoke-window",
+    sessionId: "session-smoke",
+    title: "Smoke",
+    message: "",
+    expectedProcessIdentifier: 1,
+    preview: false,
+    experience: "grayscale_window"
+  };
+  assert.equal(bridge.showFocusOverlay(JSON.stringify(windowRequest)), 1,
+    "a window reminder without its site rule must be rejected");
+  assert.equal(bridge.showFocusOverlay(JSON.stringify({ ...windowRequest, domain: "video.example" })), 4,
+    "a window reminder for a process that is not frontmost must be refused before capture");
 
   assert.throws(() => bridge.setForegroundObservation(-1), TypeError);
   assert.throws(() => bridge.showFocusOverlay(42 as unknown as string), TypeError);

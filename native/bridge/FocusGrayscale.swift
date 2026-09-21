@@ -13,6 +13,8 @@ enum FocusGrayscaleFailure: String {
     case captureFailed = "capture_failed"
     case noFrame = "no_frame"
     case displayUnavailable = "display_unavailable"
+    case windowUnavailable = "window_unavailable"
+    case windowSpansDisplays = "window_spans_displays"
 }
 
 enum FocusGrayscaleEvent {
@@ -25,6 +27,20 @@ enum FocusGrayscaleTiming {
     static let framesPerSecond: Int32 = 30
     static let firstFrameTimeout: Duration = .seconds(4)
     static let fadeDuration: TimeInterval = 0.25
+    /// Quiet period after a window moves or resizes before its new bounds are captured.
+    static let windowSettleDelay: Duration = .milliseconds(200)
+    /// Longest wait for foreground evidence that confirms a window before using the amber edge.
+    static let windowConfirmationTimeout: Duration = .seconds(2)
+}
+
+/// Part of one display to capture and cover, instead of the whole display.
+struct FocusGrayscaleRegion: Equatable {
+    /// Display-local capture rectangle in points, top-left origin, aligned to display pixels.
+    let sourceRect: CGRect
+    /// The same rectangle in global AppKit coordinates.
+    let panelFrame: NSRect
+    let pixelWidth: Int
+    let pixelHeight: Int
 }
 
 final class FocusGrayscaleRenderer: @unchecked Sendable {
@@ -185,6 +201,7 @@ final class FocusGrayscaleController {
         let displayID: CGDirectDisplayID
         let screenFrame: NSRect
         let scale: CGFloat
+        let region: FocusGrayscaleRegion?
         let panel: FocusOverlayPanel
         let view: FocusGrayscaleView
         let sink: FocusGrayscaleFrameSink
@@ -195,13 +212,17 @@ final class FocusGrayscaleController {
         var streamShutdownStarted = false
         var setup: Task<Void, Never>?
         var timeout: Task<Void, Never>?
-        var presented = false
+        var frameRendered = false
+        var suppressed: Bool
+        var reportedActive = false
 
         init(
             generation: UInt64,
             expectedProcessIdentifier: pid_t?,
             displayID: CGDirectDisplayID,
             screen: NSScreen,
+            region: FocusGrayscaleRegion?,
+            suppressed: Bool,
             panel: FocusOverlayPanel,
             view: FocusGrayscaleView,
             sink: FocusGrayscaleFrameSink,
@@ -212,6 +233,8 @@ final class FocusGrayscaleController {
             self.displayID = displayID
             screenFrame = screen.frame
             scale = screen.backingScaleFactor
+            self.region = region
+            self.suppressed = suppressed
             self.panel = panel
             self.view = view
             self.sink = sink
@@ -225,10 +248,14 @@ final class FocusGrayscaleController {
     private var latestSetup: Task<Void, Never>?
     private var latestShutdown: Task<Void, Never>?
 
+    /// Starts capture of `screen`, or of `region` on it. A suppressed presentation captures but
+    /// stays hidden until `setSuppressed(false)`.
     func start(
         screen: NSScreen,
         displayID: CGDirectDisplayID,
         expectedProcessIdentifier: pid_t?,
+        region: FocusGrayscaleRegion? = nil,
+        suppressed: Bool = false,
         onEvent: @escaping @MainActor (FocusGrayscaleEvent) -> Void
     ) -> FocusGrayscaleFailure? {
         stop()
@@ -237,15 +264,16 @@ final class FocusGrayscaleController {
 
         generation &+= 1
         let current = generation
+        let frame = region?.panelFrame ?? screen.frame
         let panel = FocusOverlayPanel(clickThrough: true, levelOffset: 0)
         let view = FocusGrayscaleView(
-            frame: NSRect(origin: .zero, size: screen.frame.size),
+            frame: NSRect(origin: .zero, size: frame.size),
             device: renderer.device,
             scale: screen.backingScaleFactor
         )
         panel.contentView = view
         panel.setAccessibilityElement(false)
-        panel.setFrame(screen.frame, display: false)
+        panel.setFrame(frame, display: false)
         let sink = FocusGrayscaleFrameSink(
             renderer: renderer,
             layer: view.metalLayer,
@@ -265,6 +293,8 @@ final class FocusGrayscaleController {
             expectedProcessIdentifier: expectedProcessIdentifier,
             displayID: displayID,
             screen: screen,
+            region: region,
+            suppressed: suppressed,
             panel: panel,
             view: view,
             sink: sink,
@@ -314,8 +344,28 @@ final class FocusGrayscaleController {
         }
     }
 
+    /// Hides a presentation's image at once, or shows it again once a frame has been rendered.
+    func setSuppressed(_ suppressed: Bool) {
+        guard let presentation, presentation.suppressed != suppressed else { return }
+        presentation.suppressed = suppressed
+        if suppressed {
+            let panel = presentation.panel
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                panel.animator().alphaValue = 0
+            }
+            panel.alphaValue = 0
+        } else {
+            reveal(presentation)
+        }
+    }
+
     func displayChanged(to screen: NSScreen?) {
         guard let presentation else { return }
+        guard presentation.region == nil else {
+            setSuppressed(true)
+            return
+        }
         guard let screen, screen.frame.size == presentation.screenFrame.size,
               screen.backingScaleFactor == presentation.scale else {
             fail(presentation.generation, .displayUnavailable)
@@ -350,13 +400,24 @@ final class FocusGrayscaleController {
         }
 
         let scale = CGFloat(filter.pointPixelScale)
-        let width = Int((filter.contentRect.width * scale).rounded())
-        let height = Int((filter.contentRect.height * scale).rounded())
+        var width = Int((filter.contentRect.width * scale).rounded())
+        var height = Int((filter.contentRect.height * scale).rounded())
         guard width > 0, height > 0 else {
             fail(generation, .displayUnavailable)
             return
         }
         let configuration = SCStreamConfiguration()
+        if let region = presentation.region {
+            let displayRect = CGRect(origin: .zero, size: filter.contentRect.size)
+            guard abs(scale - presentation.scale) < 0.01,
+                  displayRect.insetBy(dx: -0.5, dy: -0.5).contains(region.sourceRect) else {
+                fail(generation, .windowUnavailable)
+                return
+            }
+            configuration.sourceRect = region.sourceRect
+            width = region.pixelWidth
+            height = region.pixelHeight
+        }
         configuration.width = width
         configuration.height = height
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
@@ -413,14 +474,20 @@ final class FocusGrayscaleController {
     }
 
     private func firstFrameRendered(_ generation: UInt64) {
-        guard let presentation = current(generation), !presentation.presented else { return }
+        guard let presentation = current(generation), !presentation.frameRendered else { return }
         if let expected = presentation.expectedProcessIdentifier,
            NSWorkspace.shared.frontmostApplication?.processIdentifier != expected {
             presentation.onEvent(.foregroundChanged)
             return
         }
-        presentation.presented = true
+        presentation.frameRendered = true
         presentation.timeout?.cancel()
+        reveal(presentation)
+    }
+
+    private func reveal(_ presentation: Presentation) {
+        guard presentation.frameRendered, !presentation.suppressed,
+              current(presentation.generation) === presentation else { return }
         let panel = presentation.panel
         let reduceMotion = FocusOverlayAppearance.current.reduceMotion
         panel.alphaValue = reduceMotion ? 1 : 0
@@ -432,11 +499,13 @@ final class FocusGrayscaleController {
                 panel.animator().alphaValue = 1
             }
         }
+        guard !presentation.reportedActive else { return }
+        presentation.reportedActive = true
         presentation.onEvent(.active)
     }
 
     private func firstFrameTimedOut(_ generation: UInt64) {
-        guard let presentation = current(generation), !presentation.presented else { return }
+        guard let presentation = current(generation), !presentation.frameRendered else { return }
         fail(generation, .noFrame)
     }
 
