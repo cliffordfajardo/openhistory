@@ -133,9 +133,10 @@ export class FocusController extends EventEmitter {
   }
 
   savePreferences(value: unknown): FocusViewState {
-    this.options.store.savePreferences(
+    const document = this.options.store.savePreferences(
       parseOrThrow(FocusPreferencesSchema, value, "Check the site list and duration")
     );
+    this.dispatch({ type: "domains_changed", now: this.now(), domains: document.preferences.domains });
     return this.publish();
   }
 

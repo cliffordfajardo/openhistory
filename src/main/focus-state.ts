@@ -67,6 +67,7 @@ export type FocusInput =
     durationMinutes: number;
   }
   | { type: "stop"; now: number }
+  | { type: "domains_changed"; now: number; domains: string[] }
   | { type: "snooze"; now: number }
   | { type: "resume"; now: number }
   | { type: "evidence"; now: number; evidence: ForegroundEvidence }
@@ -155,6 +156,11 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
       effects.push({ type: "observe", generation: state.generationCounter });
       break;
     }
+    case "domains_changed":
+      if (state.session.status === "active") {
+        state.session = { ...state.session, domains: [...input.domains] };
+      }
+      break;
     case "stop":
       if (state.session.status === "active") endSession(state, effects);
       break;

@@ -44,6 +44,13 @@ If a site does not trigger a reminder, check that a session is running, the site
 capture is on, and snooze is off. The 2-second cooldown also applies when returning to a site.
 **Test reminder** checks the overlay independently of browser detection.
 
+If macOS logs a code-requirement mismatch after switching from an ad-hoc build to a signed
+build, install the signed app in `/Applications` first. Quit the app, then reset only this fork’s
+stale approval with `tccutil reset Accessibility io.github.cliffordfajardo.openhistory-focus`.
+Reopen it and grant Accessibility again. This removes the old grant; it does not grant access
+or delete activity. Do not reset permissions for unrelated apps. Keeping the same signing
+identity and installed bundle identifier avoids the original per-build hash requirement.
+
 First launch:
 
 1. **Privacy notice.** Capture stays paused until you accept it.
@@ -61,7 +68,7 @@ First launch:
 2. On **Focus**, add distracting sites (for example `youtube.com`). A rule covers the site and its
    subdomains (`m.youtube.com`), and nothing else (`notyoutube.com` and
    `youtube.com.example.net` do not match).
-3. Choose the goal, write an intention, pick a duration and press **Start focus**.
+3. Choose the goal, write an intention, pick a duration and press **Start focus**. Adding or removing sites during a session applies immediately, without resetting its timer or bypassing snooze.
 4. Use **Test reminder** at any time to see the real reminder on this display. The preview works
    without Accessibility or capture, and it doesn't affect a running session.
 
@@ -96,7 +103,7 @@ Browser support:
 | --- | --- |
 | Google Chrome | YouTube detection verified in the packaged Apple Silicon build on the development Mac. |
 | Safari | Targeted; real browser verification pending. |
-| Chrome-installed web apps | Recognized when the focused window exposes a readable website URL; live verification pending. |
+| Chrome-installed web apps | Recognized when the focused window exposes a readable website URL; YouTube verified in the installed development-signed build. |
 | Chrome Beta/Canary, Microsoft Edge, Brave, Arc, Firefox, Chromium, Vivaldi, Opera | Experimental: recognized by the existing collector, and reminders may work, but they are not yet verified. Firefox often exposes no readable address. |
 | Anything else (including Electron apps such as Figma, Linear, Notion) | Not observed by Focus. |
 

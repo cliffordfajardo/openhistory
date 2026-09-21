@@ -308,3 +308,35 @@ test("reports a native preview rejection instead of claiming the reminder appear
   assert.throws(() => f.controller.preview(), /could not be shown/);
   assert.equal(f.timers.callbacks.size, 0);
 });
+
+
+test("site edits apply to the active session without resetting its timer, goal or snooze", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  const started = f.controller.start({ goalId, intention: "Keep working", durationMinutes: 25 }).session;
+  assert.equal(started.status, "active");
+  evidence(f, "x.com");
+  assert.equal(f.overlay.shown.length, 0);
+  f.controller.savePreferences({ domains: ["video.example", "x.com"], durationMinutes: 50 });
+  const updated = f.controller.view().session;
+  assert.equal(updated.status, "active");
+  if (started.status !== "active" || updated.status !== "active") assert.fail("session must remain active");
+  assert.equal(updated.id, started.id);
+  assert.equal(updated.endsAt, started.endsAt);
+  assert.deepEqual(updated.goal, started.goal);
+  assert.deepEqual(updated.domains, ["video.example", "x.com"]);
+  assert.equal(f.overlay.shown.length, 1, "the freshly observed newly listed site nudges now");
+  f.controller.savePreferences({ domains: ["video.example"], durationMinutes: 50 });
+  assert.equal(f.overlay.hidden.at(-1)?.immediate, true);
+  assert.equal(f.controller.view().reminderVisible, false);
+  const snoozed = f.controller.snooze().session;
+  f.controller.savePreferences({ domains: ["x.com"], durationMinutes: 25 });
+  assert.equal(f.overlay.shown.length, 1, "adding a site must not bypass snooze");
+  const stillSnoozed = f.controller.view().session;
+  assert.equal(stillSnoozed.status === "active" ? stillSnoozed.snoozedUntil : null,
+    snoozed.status === "active" ? snoozed.snoozedUntil : null);
+  f.controller.savePreferences({ domains: [], durationMinutes: 25 });
+  assert.equal(f.controller.view().session.status, "active");
+  assert.equal(f.controller.view().reminderVisible, false);
+  assert.deepEqual(f.observations, [1], "changing sites must not restart the collector observation");
+});

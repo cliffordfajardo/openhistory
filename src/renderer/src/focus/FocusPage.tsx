@@ -438,7 +438,7 @@ function DistractingSitesCard({
         <button className="secondary-button" disabled={saving || !draft.trim()} type="submit">Add site</button>
       </form>
       {error ? <InlineError>{error}</InlineError> : null}
-      {sessionActive ? <p className="focus-quiet">Changes apply to your next session.</p> : null}
+      {sessionActive ? <p className="focus-quiet">Site changes apply immediately to this session.</p> : null}
     </div>
   );
 }
