@@ -52,3 +52,21 @@ An interactive 60-second interval in the first standalone build averaged 26.91% 
 Claude Opus reviewed privacy, native lifecycle, IPC and packaging. It found an overnight restart-state bug and a day-navigation response race, both fixed. GPT-5.6 Sol reproduced the short-cooldown dismissal race and a duplicate-callback edge; both now have regression coverage. Comment review preserved platform constraints and removed implementation narration.
 
 Grayscale review fixed a shared mutable filter race, first-frame completion handling, vertical image orientation, stale site-edit preferences, and sampled-window identity during same-browser switches. Switching between different listed sites now replaces the window reminder without resetting the session.
+
+## Grayscale orientation regression
+
+A live user report exposed a vertical inversion that the original raw-texture test missed.
+The renderer manually flipped the CIImage even though its non-flipped AppKit CAMetalLayer
+presents texture row zero at the bottom. Removing that transform restores the displayed image.
+A native synthetic window using the production renderer and actual drawable was observed via
+computer-use screenshots before and after the fix: the old image swapped the top and bottom
+quadrants, and the corrected image matches the color reference. The updated GPU test maps rows
+through that presentation convention, fails against the old renderer, and passes at 4×4 and
+8×8 with the fix. Both grayscale modes share this renderer.
+
+Build the visual regression fixture with `sh scripts/build-focus-grayscale-presentation-fixture.sh`
+and open the printed app path. Its four displayed grayscale quadrants should match the source
+positions; it needs no Screen Recording permission. This is presentation-path evidence, not a
+claim that every live crop/display configuration has been validated. During automated app
+preview testing, window targeting fell back to amber, so live browser crop alignment remains
+separate from this confirmed orientation fix. The user has now enabled Screen Recording.

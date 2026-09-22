@@ -1,8 +1,10 @@
+import AppKit
 import CoreVideo
 import Foundation
 import Metal
 
 @main
+@MainActor
 enum FocusGrayscaleGPUHarness {
     static func main() {
         guard let renderer = FocusGrayscaleRenderer() else {
@@ -46,6 +48,12 @@ enum FocusGrayscaleGPUHarness {
     }
 
     private static func verify(renderer: FocusGrayscaleRenderer, source: CVPixelBuffer, size: Int) {
+        let view = FocusGrayscaleView(frame: NSRect(x: 0, y: 0, width: size, height: size),
+                                      device: renderer.device, scale: 1)
+        guard view.layer === view.metalLayer, !view.isFlipped,
+              !view.metalLayer.isGeometryFlipped, !view.metalLayer.contentsAreFlipped() else {
+            fatalError("Grayscale view presentation orientation changed; recheck displayed pixel mapping")
+        }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false
         )
@@ -76,12 +84,15 @@ enum FocusGrayscaleGPUHarness {
             destination.getBytes(bytes.baseAddress!, bytesPerRow: size * 4,
                                  from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
         }
-        func sample(_ x: Int, _ y: Int) -> [Int] {
-            let offset = (y * size + x) * 4
+        func sampleDisplayed(_ x: Int, _ yFromTop: Int) -> [Int] {
+            // This AppKit CAMetalLayer presents texture row zero at the bottom of the view.
+            // The visual fixture verifies that convention using an actual drawable.
+            let textureRow = size - 1 - yFromTop
+            let offset = (textureRow * size + x) * 4
             return (0..<4).map { Int(output[offset + $0]) }
         }
-        let topLeft = sample(0, 0), topRight = sample(size - 1, 0)
-        let bottomLeft = sample(0, size - 1), bottomRight = sample(size - 1, size - 1)
+        let topLeft = sampleDisplayed(0, 0), topRight = sampleDisplayed(size - 1, 0)
+        let bottomLeft = sampleDisplayed(0, size - 1), bottomRight = sampleDisplayed(size - 1, size - 1)
         let samples = [topLeft, topRight, bottomLeft, bottomRight]
         for (index, pixel) in samples.enumerated() {
             guard abs(pixel[0] - pixel[1]) <= 3, abs(pixel[1] - pixel[2]) <= 3,

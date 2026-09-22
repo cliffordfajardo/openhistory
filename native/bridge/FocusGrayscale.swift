@@ -73,11 +73,6 @@ final class FocusGrayscaleRenderer: @unchecked Sendable {
         filter.contrast = 1
         filter.inputImage = source
         guard var image = filter.outputImage, source.extent.width > 0, source.extent.height > 0 else { return false }
-        // CIImage and CAMetalLayer use opposite vertical origins for this render destination.
-        image = image.transformed(by: CGAffineTransform(
-            a: 1, b: 0, c: 0, d: -1,
-            tx: 0, ty: source.extent.minY + source.extent.maxY
-        ))
         let width = CGFloat(texture.width)
         let height = CGFloat(texture.height)
         if source.extent.width != width || source.extent.height != height {
