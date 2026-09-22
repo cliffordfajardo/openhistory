@@ -8,7 +8,9 @@ Last updated: August 16, 2026
 > browser addresses; email and messaging stay excluded at first run; summaries start off and setup
 > can finish with **Keep everything local — summaries off**. During a Focus session the existing
 > collector also produces short-lived foreground observations (browser host or "unknown") that are
-> never written to disk. The optional **Grayscale window** and **Grayscale screen** reminder
+> never written to disk. Webmail hostnames can trigger configured Focus reminders even when
+> email recording is off; this does not add email URLs, titles or content to activity history.
+> Private/incognito windows remain excluded when detected. The optional **Grayscale window** and **Grayscale screen** reminder
 > styles (off by default; the amber style needs no screen access) ask for macOS Screen Recording
 > and, only while a reminder or preview is showing, capture the display it appears on to redraw
 > the distracting window (Grayscale window, which also reads that window's on-screen bounds) or

@@ -94,3 +94,20 @@ positions; it needs no Screen Recording permission. This is presentation-path ev
 claim that every live crop/display configuration has been validated. During automated app
 preview testing, window targeting fell back to amber, so live browser crop alignment remains
 separate from this confirmed orientation fix. The user has now enabled Screen Recording.
+
+## Webmail focus detection
+
+Webmail host detection now uses a Focus-specific verdict. Email recording remains controlled by
+its existing opt-in. Before the fix, the new TypeScript host and collector-service regressions
+failed because Gmail evidence was downgraded to unknown. After the fix, all 327 TypeScript tests
+and 35 Swift tests pass. Coverage includes Gmail reaching Focus while its activity event and
+recent-event buffer stay filtered, private Gmail producing no host, Browser URLs off suppressing
+evidence, retained messaging/adult exclusions, and listed webmail matching a reminder rule.
+Typechecking, native bridge smoke, distribution checks, and the signed Apple Silicon package pass.
+
+The updated installed app launches with the existing permissions and preferences. Its active
+focus session was resumed with approximately the previous remaining duration. The live Gmail
+browser check was inconclusive because computer control was interrupted and then timed out.
+No inbox screenshot or email text was collected for validation. Live Gmail presentation remains
+a manual verification item; automated checks cover the native policy, TypeScript boundary and
+reminder state machine, not the full browser Accessibility pipeline.

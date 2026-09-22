@@ -112,12 +112,18 @@ Browser support:
 
 Focus treats every uncertain state as "unknown" and does not remind:
 
-- detected private or incognito windows, and pages the privacy policy protects (adult sites, webmail,
-  messaging unless you opted in);
+- detected private or incognito windows, adult sites, and messaging pages unless you opted in;
 - unreadable addresses (for example while a page is loading or in non-English browser UIs where
   the address field isn't found);
 - excluded apps, password managers, notification overlays and OpenHistory Focus itself;
 - a locked screen, sleeping display, or an idle Mac.
+
+Webmail hosts such as `mail.google.com` can trigger a listed-site reminder even when email
+activity recording is off. Focus uses the hostname only. Email URL paths, page titles, message
+text and other email activity remain excluded from recorded history under that setting. This
+does not enable detection of native Mail or Outlook apps. If you select Window or Screen
+grayscale, its existing transient screen processing also applies to webmail; System grayscale
+and the amber edge need no screen capture.
 
 Private-window detection is heuristic and depends on the browser’s exposed accessibility
 information. It is not a universal guarantee across browser versions or languages.
@@ -253,8 +259,9 @@ action, run through user-made shortcuts. It is not implemented.
   "browser: process, bundle, host" or "unknown: reason". Packets go straight to the main process
   and are **never written** to the activity files or to the 250-event live buffer. The URL,
   window title and page content are not in the packet.
-- **Checked twice.** Swift applies the existing protection policy before sending; TypeScript
-  re-applies its own policy and downgrades protected hosts to "unknown".
+- **Checked twice.** Swift and TypeScript apply a separate Focus policy that allows webmail
+  hostnames without enabling email activity recording. Private-window and other Focus exclusions
+  still produce "unknown". The activity-recording policy and its email opt-in stay unchanged.
 - **Local data.** Everything lives in `~/Library/Application Support/OpenHistory Focus/activity-data`
   (mode 0700): activity JSONL, `focus.json` (goals and sites), settings and any summaries. Upstream
   OpenHistory's directory, environment variables, keys and consents are never read.
