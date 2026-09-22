@@ -1,4 +1,4 @@
-import type { FocusViewState } from "@shared/focus";
+import { FOCUS_TIMING, type FocusViewState } from "@shared/focus";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
@@ -14,6 +14,11 @@ import {
 } from "./focus-controller";
 import type { FocusCapability } from "./focus-state";
 import { FocusStore } from "./focus-store";
+import {
+  SystemColorFilterController,
+  type SystemColorFilterBinding,
+  type SystemColorFilterSettings
+} from "./system-color-filter";
 
 class FakeOverlay implements FocusOverlayBinding {
   shown: FocusOverlayRequest[] = [];
@@ -88,7 +93,8 @@ interface Fixture {
 async function fixture(
   context: TestContext,
   directory?: string,
-  screenCapture = new FakeScreenCapture()
+  screenCapture = new FakeScreenCapture(),
+  systemFilter?: SystemColorFilterController
 ): Promise<Fixture> {
   const dataDirectory = directory ?? await testDirectory(context);
   const overlay = new FakeOverlay();
@@ -108,6 +114,7 @@ async function fixture(
     store,
     overlay,
     screenCapture,
+    ...(systemFilter ? { systemFilter } : {}),
     setForegroundObservation: (generation) => observations.push(generation),
     capability: () => capability,
     now: () => clock.now,
@@ -288,7 +295,8 @@ test("previews through the same native path without collection or a session", as
     message: "Back to: Outline",
     expectedProcessIdentifier: null,
     preview: true,
-    experience: "amber"
+    experience: "amber",
+    amberEdge: true
   });
   assert.equal(f.controller.view().session.status, "idle");
   assert.equal(f.timers.callbacks.size, 1, "a timer runs to fade the preview out");
@@ -631,4 +639,166 @@ test("a grayscale window preview targets this app without a site and never promp
     [request.experience, request.preview, request.domain, request.expectedProcessIdentifier],
     ["grayscale_window", true, undefined, null]
   );
+});
+
+const GRAY = { enabled: true, type: 1 };
+
+/** Stands in for the persisted macOS Color Filters setting. */
+class FakeColorFilters implements SystemColorFilterBinding {
+  writes: SystemColorFilterSettings[] = [];
+  writable = true;
+
+  constructor(public settings: SystemColorFilterSettings = { enabled: false, type: 2 }) {}
+
+  read(): SystemColorFilterSettings | null {
+    return { ...this.settings };
+  }
+
+  write(settings: SystemColorFilterSettings): boolean {
+    this.writes.push({ ...settings });
+    if (this.writable) this.settings = { ...settings };
+    return this.writable;
+  }
+}
+
+async function systemFixture(
+  context: TestContext,
+  filters = new FakeColorFilters()
+): Promise<Fixture & { filters: FakeColorFilters }> {
+  const directory = await testDirectory(context);
+  const filter = new SystemColorFilterController({
+    binding: filters,
+    journalPath: resolve(directory, "color-filter-restore.json")
+  });
+  const f = await fixture(context, directory, new FakeScreenCapture(), filter);
+  return { ...f, filters };
+}
+
+async function systemSession(context: TestContext): Promise<Fixture & { filters: FakeColorFilters }> {
+  const f = await systemFixture(context);
+  f.controller.setExperience("grayscale_system");
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  return f;
+}
+
+test("a system grayscale reminder writes once, needs no Screen Recording and restores on hide", async (context) => {
+  const f = await systemSession(context);
+  assert.deepEqual(f.filters.writes, [], "choosing the style changes nothing yet");
+  evidence(f);
+  const shown = f.overlay.shown.at(-1)!;
+  assert.deepEqual([shown.experience, shown.amberEdge], ["grayscale_system", true]);
+  assert.deepEqual(f.filters.writes, [GRAY]);
+  assert.deepEqual([f.controller.view().effect?.status, f.controller.view().systemFilter.phase], ["showing", "applied"]);
+
+  for (let index = 0; index < 5; index += 1) {
+    f.clock.now += 500;
+    evidence(f, "video.example", 2 + index);
+    f.timers.tick();
+  }
+  assert.equal(f.filters.writes.length, 1, "ticks and repeated evidence never rewrite");
+  assert.equal(f.screenCapture.requests, 0);
+
+  evidence(f, "safe.example", 20);
+  assert.deepEqual(f.filters.settings, { enabled: false, type: 2 }, "the earlier settings return, not just off");
+  assert.equal(f.controller.view().systemFilter.phase, "idle");
+});
+
+test("snooze, stop and shutdown each restore the earlier settings", async (context) => {
+  for (const end of ["snooze", "stop", "shutdown"] as const) {
+    const f = await systemSession(context);
+    f.filters.settings = { enabled: true, type: 8 };
+    evidence(f);
+    assert.deepEqual(f.filters.settings, GRAY);
+    if (end === "snooze") f.controller.snooze();
+    else if (end === "stop") f.controller.stop();
+    else f.controller.shutdown();
+    assert.deepEqual(f.filters.settings, { enabled: true, type: 8 }, end);
+  }
+});
+
+test("a failed turn-on shows the reminder without grayscale and isn't retried on ticks", async (context) => {
+  const f = await systemSession(context);
+  f.filters.writable = false;
+  evidence(f);
+  const view = f.controller.view();
+  assert.deepEqual([view.effect?.status, view.effect?.fallbackReason, view.reminderVisible], ["fallback", "system_filter_failed", true]);
+  assert.equal(view.systemFilter.failure, "apply_failed");
+  const attempts = f.filters.writes.length;
+  for (let index = 0; index < 5; index += 1) {
+    f.clock.now += 500;
+    evidence(f, "video.example", 2 + index);
+    f.timers.tick();
+  }
+  assert.equal(f.filters.writes.length, attempts);
+
+  f.filters.writable = true;
+  evidence(f, "safe.example", 10);
+  f.clock.now += FOCUS_TIMING.globalCooldownMs;
+  evidence(f, "video.example", 11);
+  assert.deepEqual([f.controller.view().effect?.status, f.controller.view().systemFilter.failure], ["showing", null]);
+});
+
+test("system grayscale can't be chosen without the native setting, and a saved choice falls back", async (context) => {
+  const unreadable = new FakeColorFilters();
+  unreadable.read = () => null;
+  const f = await systemFixture(context, unreadable);
+  assert.throws(() => f.controller.setExperience("grayscale_system"), /isn’t available on this Mac/);
+  assert.equal(f.controller.view().systemFilter.phase, "unsupported");
+
+  const directory = await testDirectory(context);
+  new FocusStore(directory).setExperience("grayscale_system");
+  const saved = await fixture(context, directory, new FakeScreenCapture(), new SystemColorFilterController({
+    binding: undefined,
+    journalPath: resolve(directory, "color-filter-restore.json")
+  }));
+  saved.controller.preview();
+  assert.deepEqual(
+    [saved.controller.view().effect?.status, saved.controller.view().effect?.fallbackReason],
+    ["fallback", "system_filter_unavailable"]
+  );
+});
+
+test("style and amber edge changes during a system grayscale reminder keep the session", async (context) => {
+  const f = await systemSession(context);
+  evidence(f);
+  const session = f.controller.view().session;
+
+  f.controller.setAmberEdge(false);
+  const edgeless = f.overlay.shown.at(-1)!;
+  assert.deepEqual([edgeless.experience, edgeless.amberEdge], ["grayscale_system", false]);
+  assert.equal(f.filters.writes.length, 1, "the edge toggle doesn't cycle Color Filters");
+  assert.equal(f.controller.view().effect?.status, "showing");
+  assert.throws(() => f.controller.setAmberEdge("no"));
+  assert.equal(new FocusStore(f.directory).load().preferences.amberEdge, false);
+
+  f.screenCapture.granted = true;
+  f.controller.setExperience("grayscale_screen");
+  assert.equal(f.overlay.shown.at(-1)!.experience, "grayscale_screen");
+  assert.deepEqual(f.filters.settings, { enabled: false, type: 2 });
+  f.controller.setExperience("grayscale_system");
+  assert.deepEqual(f.filters.settings, GRAY);
+  assert.equal(f.controller.view().effect?.status, "showing");
+  assert.deepEqual(f.controller.view().session, session);
+  assert.deepEqual(f.observations, [1]);
+});
+
+test("restore colors during a preview keeps it from turning grayscale back on", async (context) => {
+  const f = await systemFixture(context);
+  f.controller.setExperience("grayscale_system");
+  f.controller.preview();
+  assert.deepEqual(f.filters.settings, GRAY);
+
+  const restored = f.controller.restoreSystemColors();
+  assert.deepEqual([restored.effect?.status, restored.effect?.fallbackReason], ["fallback", "system_filter_restored"]);
+  assert.deepEqual([restored.systemFilter.phase, restored.systemFilter.restorePending], ["idle", false]);
+  assert.deepEqual(f.filters.settings, { enabled: false, type: 2 });
+  f.timers.tick();
+  assert.equal(f.filters.writes.length, 2, "the preview doesn't turn it back on");
+
+  f.clock.now += 10_000;
+  f.timers.tick();
+  assert.equal(f.controller.view().effect?.visible, false);
+  assert.equal(f.filters.writes.length, 2, "ending the preview has nothing left to restore");
 });

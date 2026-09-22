@@ -47,6 +47,30 @@ An interactive 60-second interval in the first standalone build averaged 26.91% 
 - Idle time suppresses reminders but is not stored as historical idle duration. Timeline spans are observed intervals; unknown gaps remain unknown.
 - Hard blocking is outside this MVP. See [FOCUS.md](FOCUS.md) for the extension/enforcement work it would require.
 
+## System grayscale and independent amber edge
+
+Validated on macOS 26.6.2 arm64 with the signed installed application.
+
+- Private API read/write (enabled and type, toggled on and off, then restored to the original
+  settings) was verified directly on macOS 26.6.2 arm64 with an on-screen check. That check
+  covers the native calls. The installed app also activated a System preview and showed
+  its completed status afterward; System Settings confirmed Color Filters returned to Off.
+  A YouTube session triggered a reminder. Live app-switch timing remains a manual check.
+- All 323 TypeScript tests passed, including seven restoration regressions. Typechecking,
+  the host signed package, native bridge smoke and 4×4/8×8 GPU orientation tests passed.
+- Automated coverage: legacy preference migration (edge stays on only for the old amber style),
+  every grayscale/edge combination in the reminder request, live edge and style changes that
+  keep the session, system grayscale without Screen Recording, the journal written before the
+  first write, exact restore of earlier enabled/type settings, already-grayscale settings left
+  untouched, a manual change kept, failed and half-applied writes, a restore failure that keeps
+  the journal and blocks turn-ons, launch recovery (including an unreadable journal), and
+  hide/snooze/stop/shutdown/restore paths.
+- The native bridge smoke reads (never writes) Color Filters and accepts a `grayscale_system`
+  request without starting capture.
+- Needs manual validation in the packaged app: multiple-display behavior, the edge toggle during a reminder, **Restore previous colors**, quit while
+  gray, and a relaunch after a forced quit while gray. Also confirm the edge draws above captured
+  grayscale and below the card, and never appears in the gray image.
+
 ## Independent review
 
 Claude Opus reviewed privacy, native lifecycle, IPC and packaging. It found an overnight restart-state bug and a day-navigation response race, both fixed. GPT-5.6 Sol reproduced the short-cooldown dismissal race and a duplicate-callback edge; both now have regression coverage. Comment review preserved platform constraints and removed implementation narration.

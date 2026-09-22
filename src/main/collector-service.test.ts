@@ -206,9 +206,29 @@ test("exposes the native reminder only when the bridge provides it", async (cont
     message: "",
     expectedProcessIdentifier: null,
     preview: true,
-    experience: "amber"
+    experience: "amber",
+    amberEdge: true
   }), "no_display");
   assert.equal((JSON.parse(requests[0]!) as { nudgeId: string }).nudgeId, "preview-1");
+});
+
+test("exposes Color Filters only when the bridge has both calls, passing settings as arguments", async (context) => {
+  const directory = await testDirectory(context);
+  const readOnly = Object.assign(new FakeNativeCollector(), { systemColorFilterRead: () => null });
+  assert.equal(new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, readOnly).focusSystemFilter(), undefined);
+
+  const writes: unknown[][] = [];
+  const binding = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, Object.assign(new FakeNativeCollector(), {
+    systemColorFilterRead: () => ({ enabled: false, type: 2 }),
+    systemColorFilterWrite: (...args: unknown[]) => {
+      writes.push(args);
+      return true;
+    }
+  })).focusSystemFilter();
+  assert(binding);
+  assert.deepEqual(binding.read(), { enabled: false, type: 2 });
+  assert.equal(binding.write({ enabled: true, type: 1 }), true);
+  assert.deepEqual(writes, [[true, 1]]);
 });
 
 test("exposes Screen Recording access only when the bridge supports grayscale", async (context) => {
@@ -252,7 +272,8 @@ test("exposes Screen Recording access only when the bridge supports grayscale", 
     message: "",
     expectedProcessIdentifier: null,
     preview: true,
-    experience: "grayscale_screen"
+    experience: "grayscale_screen",
+    amberEdge: false
   }), "shown_fallback_permission");
 
   const windowRequests: string[] = [];
@@ -272,6 +293,7 @@ test("exposes Screen Recording access only when the bridge supports grayscale", 
       expectedProcessIdentifier: 501,
       preview: false,
       experience: "grayscale_window",
+      amberEdge: true,
       domain: "video.example"
     }), result);
   }

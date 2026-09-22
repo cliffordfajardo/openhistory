@@ -56,6 +56,7 @@ import { deleteOwnedDataDirectory, ensureOwnedDataDirectory } from "./data-direc
 import { sanitizedDiagnostics } from "./diagnostics";
 import { FocusController } from "./focus-controller";
 import { FocusStore } from "./focus-store";
+import { SystemColorFilterController } from "./system-color-filter";
 import { HourCoordinator } from "./hour-coordinator";
 import { HourStore } from "./hour-store";
 import { HistoryChatService } from "./history-chat-service";
@@ -123,6 +124,7 @@ let dailyRollup: DailyRollupCoordinator;
 let agentMcp: AgentMcpService;
 let historyChat: HistoryChatService;
 let focus: FocusController | undefined;
+let systemColorFilter: SystemColorFilterController | undefined;
 let timelineStateCache: TimelineState | undefined;
 let derivedStateTimer: ReturnType<typeof setInterval> | undefined;
 let automaticHistoryTimer: ReturnType<typeof setInterval> | undefined;
@@ -639,10 +641,15 @@ async function initialize(): Promise<void> {
   if (settings.privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION || settings.capturePaused) {
     collector.setEnabled(false);
   }
+  systemColorFilter = new SystemColorFilterController({
+    binding: collector.focusSystemFilter(),
+    journalPath: join(app.getPath("userData"), "focus-color-filter-restore.json")
+  });
   focus = new FocusController({
     store: new FocusStore(config.dataDirectory),
     overlay: collector.focusOverlay(),
     screenCapture: collector.focusScreenCapture(),
+    systemFilter: systemColorFilter,
     setForegroundObservation: (generation) => collector.setForegroundObservation(generation),
     capability: () => ({
       privacyAccepted: collector.currentSettings.privacyNoticeVersion >= CURRENT_PRIVACY_NOTICE_VERSION,
@@ -971,6 +978,7 @@ async function initialize(): Promise<void> {
     if (confirmation.response !== 1) return false;
     if (historyBuildPromise) await historyBuildPromise.catch(() => undefined);
     focus?.shutdown();
+    systemColorFilter?.shutdown();
     collector.stop();
     await agentMcp.stop();
     if (derivedStateTimer) clearInterval(derivedStateTimer);
@@ -1032,6 +1040,9 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
   handleTrustedIpc(IPC_CHANNELS.setFocusExperience, (_event, experience: unknown) =>
     focus!.setExperience(experience));
+  handleTrustedIpc(IPC_CHANNELS.setFocusAmberEdge, (_event, amberEdge: unknown) =>
+    focus!.setAmberEdge(amberEdge));
+  handleTrustedIpc(IPC_CHANNELS.restoreFocusSystemColors, () => focus!.restoreSystemColors());
   handleTrustedIpc(IPC_CHANNELS.requestScreenCapture, () => focus!.requestScreenCapture());
   handleTrustedIpc(IPC_CHANNELS.refreshScreenCapture, () => focus!.refreshScreenCapture());
   handleTrustedIpc(IPC_CHANNELS.openScreenCaptureSettings, async () => {
@@ -1132,6 +1143,7 @@ app.on("before-quit", () => {
   if (appPresentationModeTimer) clearTimeout(appPresentationModeTimer);
   if (menuBarBlurTimer) clearTimeout(menuBarBlurTimer);
   focus?.shutdown();
+  systemColorFilter?.shutdown();
   collector?.stop();
   void agentMcp?.stop();
 });

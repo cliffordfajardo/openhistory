@@ -26,17 +26,19 @@ import {
   reduceFocus,
   reminderCopy,
   sessionView,
+  systemFilterWanted,
   type FocusCapability,
   type FocusEffect,
   type FocusInput,
   type FocusMachineState
 } from "./focus-state";
 import type { FocusStore } from "./focus-store";
+import type { SystemColorFilterController } from "./system-color-filter";
 
 /**
- * `shown_fallback_*`: the card and amber edge are on screen, but grayscale was requested and the
- * native side could not start it (no Screen Recording access, no capture/GPU support, or no
- * exactly matched distracting window on a single display).
+ * `shown_fallback_*`: the card (and the amber edge, if enabled) is on screen, but captured
+ * grayscale was requested and the native side could not start it (no Screen Recording access, no
+ * capture/GPU support, or no exactly matched distracting window on a single display).
  */
 export type FocusOverlayShowResult =
   | "shown"
@@ -58,6 +60,7 @@ export interface FocusOverlayRequest {
   expectedProcessIdentifier: number | null;
   preview: boolean;
   experience: FocusExperience;
+  amberEdge: boolean;
   domain?: string;
 }
 
@@ -78,6 +81,8 @@ export interface FocusControllerOptions {
   overlay: FocusOverlayBinding | undefined;
   /** Absent when the native bridge can't capture; grayscale then falls back to amber. */
   screenCapture?: FocusScreenCaptureBinding;
+  /** Owns system grayscale; absent where the native bridge lacks it. */
+  systemFilter?: SystemColorFilterController;
   setForegroundObservation: (generation: number) => void;
   capability: () => Omit<FocusCapability, "overlayAvailable">;
   now?: () => number;
@@ -130,6 +135,7 @@ export class FocusController extends EventEmitter {
   private readonly createPreviewId: () => string;
   private readonly timers: NonNullable<FocusControllerOptions["timers"]>;
   private shutDown = false;
+  private systemFilterOn = false;
   private screenCaptureRequested = false;
 
   constructor(private readonly options: FocusControllerOptions) {
@@ -142,10 +148,13 @@ export class FocusController extends EventEmitter {
       setInterval: (callback, milliseconds) => setInterval(callback, milliseconds),
       clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>)
     };
+    const preferences = options.store.load().preferences;
     this.machine = initialFocusState(
       this.currentCapability(),
-      options.store.load().preferences.experience,
-      this.currentScreenCapture()
+      preferences.experience,
+      this.currentScreenCapture(),
+      preferences.amberEdge,
+      Boolean(options.systemFilter?.available)
     );
     options.overlay?.setActionHandler((line) => this.handleOverlayAction(line));
   }
@@ -165,6 +174,8 @@ export class FocusController extends EventEmitter {
         ? null
         : new Date(this.machine.lastNudgeAt).toISOString(),
       screenCapture: { access: this.machine.screenCapture, requested: this.screenCaptureRequested },
+      systemFilter: this.options.systemFilter?.view() ??
+        { available: false, phase: "unsupported", failure: null, restorePending: false },
       effect: effectView(this.machine),
       recoveredFromInvalidFile: this.options.store.recoveredFromInvalidFile
     };
@@ -189,21 +200,55 @@ export class FocusController extends EventEmitter {
 
   savePreferences(value: unknown): FocusViewState {
     const input = parseOrThrow(FocusPreferencesInputSchema, value, "Check the site list and duration");
+    const saved = this.options.store.load().preferences;
+    const experience = input.experience ?? saved.experience;
+    if (experience !== saved.experience) this.assertExperienceAvailable(experience);
     const document = this.options.store.savePreferences({
+      ...saved,
       domains: input.domains,
       durationMinutes: input.durationMinutes,
-      experience: input.experience ?? this.options.store.load().preferences.experience
+      experience
     });
     this.dispatch({ type: "domains_changed", now: this.now(), domains: document.preferences.domains });
     this.applyExperience(document.preferences.experience);
     return this.publish();
   }
 
-  /** Saves the reminder style and applies it to a running session without restarting it. */
+  /** Saves the grayscale choice and applies it to a running session without restarting it. */
   setExperience(value: unknown): FocusViewState {
     const experience = parseOrThrow(FocusExperienceSchema, value, "Choose a reminder style");
+    this.assertExperienceAvailable(experience);
     this.options.store.setExperience(experience);
     this.applyExperience(experience);
+    return this.publish();
+  }
+
+  /** Saves the amber edge and applies it to a visible reminder without restarting the session. */
+  setAmberEdge(value: unknown): FocusViewState {
+    const amberEdge = parseOrThrow(z.boolean(), value, "Choose whether to show the amber edge");
+    this.options.store.updatePreferences({ amberEdge });
+    this.dispatch({ type: "amber_edge_changed", now: this.now(), amberEdge });
+    return this.publish();
+  }
+
+  /**
+   * Puts back the Color Filters settings saved before system grayscale, including ones left by an
+   * earlier launch, and keeps a visible reminder from turning it on again.
+   */
+  restoreSystemColors(): FocusViewState {
+    const filter = this.options.systemFilter;
+    if (!filter) throw new Error("System grayscale isn’t available in this build");
+    const effect = this.machine.effect;
+    if (effect?.visible && effect.requested === "grayscale_system" && effect.status !== "fallback") {
+      this.dispatch({
+        type: "effect_status",
+        now: this.now(),
+        nudgeId: effect.nudgeId,
+        status: "fallback",
+        reason: "system_filter_restored"
+      });
+    }
+    filter.restore();
     return this.publish();
   }
 
@@ -319,7 +364,10 @@ export class FocusController extends EventEmitter {
     this.publish();
   }
 
-  /** Ends any session and removes reminders before quit or data deletion. */
+  /**
+   * Ends any session and removes reminders before quit or data deletion; ending a system
+   * grayscale reminder restores the earlier Color Filters settings synchronously.
+   */
   shutdown(): void {
     if (this.shutDown) return;
     this.dispatch({ type: "stop", now: this.now() });
@@ -371,6 +419,38 @@ export class FocusController extends EventEmitter {
     this.machine = transition.state;
     for (const effect of transition.effects) this.perform(effect);
     this.syncTimer();
+    this.syncSystemFilter();
+  }
+
+  private syncSystemFilter(): void {
+    const filter = this.options.systemFilter;
+    if (!filter || this.shutDown) return;
+    const wanted = systemFilterWanted(this.machine);
+    if (wanted) {
+      this.systemFilterOn = filter.apply();
+    } else if (this.systemFilterOn) {
+      filter.restore();
+      this.systemFilterOn = false;
+    }
+    const effect = this.machine.effect;
+    if (!wanted || !effect) return;
+    if (!this.systemFilterOn) {
+      this.dispatch({
+        type: "effect_status",
+        now: this.now(),
+        nudgeId: effect.nudgeId,
+        status: "fallback",
+        reason: "system_filter_failed"
+      });
+    } else if (effect.status === "preparing") {
+      this.dispatch({ type: "effect_status", now: this.now(), nudgeId: effect.nudgeId, status: "active" });
+    }
+  }
+
+  private assertExperienceAvailable(experience: FocusExperience): void {
+    if (experience === "grayscale_system" && !this.options.systemFilter?.available) {
+      throw new Error("System grayscale isn’t available on this Mac");
+    }
   }
 
   private perform(effect: FocusEffect): void {

@@ -16,21 +16,27 @@ struct FocusOverlayRequest: Decodable {
     let message: String
     let expectedProcessIdentifier: Int32?
     let preview: Bool
-    /// "amber" (the default when absent), "grayscale_window" or "grayscale_screen".
+    /// "amber" (no grayscale; the default when absent), "grayscale_window", "grayscale_screen" or
+    /// "grayscale_system". Color Filters are switched by the app outside this overlay, so
+    /// "grayscale_system" captures nothing here.
     let experience: String?
+    /// Whether to draw the amber edge; absent means yes, as before the edge was separate.
+    let amberEdge: Bool?
     /// The listed site rule a window-only reminder is for; its window is grayed only while fresh
     /// foreground evidence from that window matches it.
     let domain: String?
 
     var wantsGrayscale: Bool { experience == "grayscale_screen" }
     var wantsWindowGrayscale: Bool { experience == "grayscale_window" }
+    var showsAmberEdge: Bool { amberEdge ?? true }
 
     var isValid: Bool {
         !nudgeId.isEmpty && nudgeId.count <= 100 &&
             (sessionId?.count ?? 0) <= 100 &&
             !title.isEmpty && title.count <= 300 &&
             message.count <= 600 &&
-            (experience == nil || ["amber", "grayscale_window", "grayscale_screen"].contains(experience)) &&
+            (experience == nil ||
+                ["amber", "grayscale_window", "grayscale_screen", "grayscale_system"].contains(experience)) &&
             (domain?.count ?? 0) <= 253 &&
             (preview || !wantsWindowGrayscale || domain?.isEmpty == false) &&
             (preview || (expectedProcessIdentifier ?? 0) > 0)
@@ -43,13 +49,13 @@ enum FocusOverlayShowResult: Int32 {
     case notMainThread = 2
     case noDisplay = 3
     case foregroundChanged = 4
-    /// Card and amber edge shown because grayscale needs Screen Recording access.
+    /// Grayscale needs Screen Recording access.
     case shownFallbackPermission = 5
-    /// Card and amber edge shown because grayscale capture isn't supported here.
+    /// Grayscale capture isn't supported here.
     case shownFallbackUnavailable = 6
-    /// Card and amber edge shown because the distracting window couldn't be matched exactly.
+    /// The distracting window couldn't be matched exactly.
     case shownFallbackWindow = 7
-    /// Card and amber edge shown because the distracting window covers more than one display.
+    /// The distracting window covers more than one display.
     case shownFallbackWindowSpansDisplays = 8
 }
 
@@ -412,7 +418,6 @@ final class FocusOverlayController: NSObject {
         }
 
         var result = FocusOverlayShowResult.shown
-        var grayscaleStarted = false
         if request.wantsGrayscale {
             if let display = currentDisplay {
                 let nudgeId = request.nudgeId
@@ -427,7 +432,7 @@ final class FocusOverlayController: NSObject {
                     }
                 )
                 switch failure {
-                case nil: grayscaleStarted = true
+                case nil: break
                 case .permissionNeeded?: result = .shownFallbackPermission
                 case _?: result = .shownFallbackUnavailable
                 }
@@ -445,18 +450,18 @@ final class FocusOverlayController: NSObject {
                 }
             )
             switch failure {
-            case nil: grayscaleStarted = true
+            case nil: break
             case .permissionNeeded?: result = .shownFallbackPermission
             case .windowUnavailable?: result = .shownFallbackWindow
             case .windowSpansDisplays?: result = .shownFallbackWindowSpansDisplays
             case _?: result = .shownFallbackUnavailable
             }
         }
-        if grayscaleStarted {
+        if request.showsAmberEdge {
+            presentGlow(glow, options: options)
+        } else {
             glow.alphaValue = 0
             glow.orderOut(nil)
-        } else {
-            presentGlow(glow, options: options)
         }
         NSAccessibility.post(element: cardView, notification: .layoutChanged)
         return result
@@ -482,10 +487,6 @@ final class FocusOverlayController: NSObject {
         case .active:
             reportEffect("active", request: request, reason: nil)
         case .failed(let reason):
-            if let glow = glowPanel {
-                glowView?.needsDisplay = true
-                presentGlow(glow, options: FocusOverlayAppearance.current)
-            }
             reportEffect("fallback", request: request, reason: reason.rawValue)
         case .foregroundChanged:
             hide(nudgeId: request.nudgeId, immediate: true)
@@ -605,12 +606,12 @@ final class FocusOverlayController: NSObject {
         if let glowPanel, let cardPanel, let glowView, let cardView {
             return (glowPanel, cardPanel, glowView, cardView)
         }
-        let glow = FocusOverlayPanel(clickThrough: true, levelOffset: 0)
+        let glow = FocusOverlayPanel(clickThrough: true, levelOffset: 1)
         let glowView = FocusGlowView(frame: .zero)
         glow.contentView = glowView
         glow.setAccessibilityElement(false)
 
-        let card = FocusOverlayPanel(clickThrough: false, levelOffset: 1)
+        let card = FocusOverlayPanel(clickThrough: false, levelOffset: 2)
         let cardView = FocusCardView(
             onSnooze: { MainActor.assumeIsolated { FocusOverlayController.shared.handleButton("snooze") } },
             onDismiss: { MainActor.assumeIsolated { FocusOverlayController.shared.handleButton("dismiss") } }
@@ -723,8 +724,8 @@ final class FocusOverlayController: NSObject {
         let options = FocusOverlayAppearance.current
         glowView?.appearanceOptions = options
         cardView?.apply(options)
-        if options.reduceMotion, current != nil {
-            glowPanel?.alphaValue = 1
+        if options.reduceMotion, let request = current {
+            if request.showsAmberEdge { glowPanel?.alphaValue = 1 }
             cardPanel?.alphaValue = 1
         }
     }

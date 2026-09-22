@@ -452,7 +452,8 @@ final class FocusGrayscaleController {
         }
     }
 
-    /// Exclude this app's overlay panels while retaining its normal visible windows.
+    /// Exclude this app's overlay panels (grayscale surface, amber edge and card) while retaining
+    /// its normal visible windows, so nothing the reminder draws is captured back into it.
     private static func contentFilter(display: SCDisplay, content: SCShareableContent) -> SCContentFilter? {
         let processIdentifier = ProcessInfo.processInfo.processIdentifier
         guard let application = content.applications.first(where: { $0.processID == processIdentifier }) else {

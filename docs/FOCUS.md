@@ -8,9 +8,10 @@ adds a calm focus companion on top of OpenHistory's private, local activity coll
   minutes, and list the sites that tend to pull you away.
 - **A gentle reminder**: during a session, if a listed site is the front browser tab, a thin warm
   amber edge fades in around that display with a small reminder card near the top: your goal and
-  intention, plus **Snooze 5 min** and **Dismiss**. Optionally, the **Grayscale window** style
-  shows only the distracting window in gray, and the **Grayscale screen** style shows that whole
-  display in gray, instead of the amber edge (see [Reminder styles](#reminder-styles)).
+  intention, plus **Snooze 5 min** and **Dismiss**. Optionally, grayscale can show only the
+  distracting window, that whole display (both captured), or every display (System, through
+  macOS Color Filters) in gray,
+  with or without the amber edge (see [Reminder styles](#reminder-styles)).
 - **An Activity timeline**: a model-free, chronological view of each recorded day.
 
 Focus **nudges; it never blocks**. Every site stays reachable, and nothing is closed, hidden or
@@ -123,30 +124,40 @@ information. It is not a universal guarantee across browser versions or language
 
 ## Reminder styles
 
-Choose a style under **Focus → Reminder style**. It is saved in `focus.json` and applies
-immediately, including to a running session: a visible reminder is replaced in the new style,
-while the session's goal, timer, site list, snooze and dismiss quiet period are kept.
+Under **Focus → Reminder style**, the **Amber edge** switch and the **Grayscale** choice are
+independent. Both are saved in `focus.json` and apply immediately, including to a running
+session: a visible reminder is replaced in the new style without waiting for the cooldown, while
+the session's goal, timer, site list, snooze and dismiss quiet period are kept.
 
-- **Amber edge** (default, and the style for files saved before styles existed): the warm edge
-  described above. It needs no permission beyond Accessibility.
-- **Grayscale window**: while a reminder shows, only the distracting browser window is shown in
+- **Amber edge** (on by default): the warm edge described above. It needs no permission beyond
+  Accessibility. Above a captured gray image it is drawn over the gray, and the card above both.
+  Files saved before the switch existed keep their look: it is on for the old amber style and off
+  for the old grayscale styles.
+- **None** (stored as `experience: "amber"`, its name from before the edge was separate): colors
+  are unchanged.
+- **Window**: while a reminder shows, only the distracting browser window is shown in
   grayscale; the rest of the display, other windows and other displays stay in color. For a
   preview, the Focus window itself stands in for the distracting window. It needs macOS Screen
-  Recording access (the same permission as Grayscale screen).
-- **Grayscale screen**: while a reminder or preview is showing, the **entire display** that holds
+  Recording access (the same permission as Screen).
+- **Screen**: while a reminder or preview is showing, the **entire display** that holds
   the distracting window (for a preview, the display with the Focus window) is shown in grayscale.
   Other displays stay in color. The reminder card, Snooze and Dismiss are the same; the card and
   any OpenHistory Focus panels stay in color above the gray image. It needs macOS Screen
   Recording access.
+- **System** (experimental): macOS Color Filters set to grayscale. Every display turns gray,
+  including the reminder card and amber edge. No Screen Recording, no frames captured. See
+  [System grayscale](#system-grayscale).
 
 How grayscale works: `FocusGrayscale.swift` captures that display with ScreenCaptureKit at up to
 30 fps (the real cursor stays visible; the captured one is off), desaturates each complete frame
 with Core Image on the GPU and draws it into a Metal layer in a click-through, nonactivating panel
-just below the card. The capture filter excludes this app's own overlay panels (by excluding the
+below the amber edge and the card. The capture filter excludes this app's own overlay panels,
+including the edge, so they never feed back into the gray image (by excluding the
 app and listing its visible normal windows as exceptions, so the Focus window still appears under
 the gray image). The panel appears only after the first captured frame is rendered; before that,
-the Focus page says "Starting grayscale" rather than claiming it is shown. No system display
-setting, private API or Shortcut is used, and nothing changes after the app quits or crashes.
+the Focus page says "Starting grayscale" rather than claiming it is shown. Window and Screen use
+no system display setting, private API or Shortcut, and nothing changes after the app quits or
+crashes.
 
 How grayscale window works (`FocusWindowGrayscale.swift`): this is an overlay built from a public
 screen capture, not a system filter. The target is the browser's focused window from Accessibility
@@ -178,7 +189,8 @@ Following the window:
   window moved to another Space falls back to amber.
 - The cooldown, snooze, dismiss quiet period, 8 s preview and stop/quit cleanup are unchanged.
 
-When grayscale can't run, the reminder shows the amber edge instead and the Focus page says why:
+When captured grayscale can't run, the reminder shows without it (the card, plus the edge only if
+the switch is on) and the Focus page says why:
 Screen Recording not allowed, capture unsupported, capture stopped (including revoking access
 while it runs), no frame within 4 s, the display changed, the distracting window couldn't be
 matched or followed exactly, or the window is on more than one display. The whole display is
@@ -186,11 +198,44 @@ never grayed in place of a window. A fallback lasts until that reminder hides. H
 removes the gray panel synchronously and then stops capture, so a late capture callback can't
 bring it back.
 
+### System grayscale
+
+**Experimental.** This option sets macOS Color Filters (the setting under **System Settings →
+Accessibility → Display → Color Filters**) to grayscale through private MediaAccessibility calls,
+loaded at runtime. They are undocumented, unsupported by Apple and may break in any macOS
+update; they were tested on macOS 26.6.2 (arm64). Where they can't be loaded, the option is
+unavailable and a saved choice shows the card (and edge, if on) without grayscale. No setup,
+permission, capture, Shortcut or UI automation is involved.
+
+- The setting is system-wide and persisted: every display turns gray, including the reminder
+  card and amber edge, and it survives until changed back.
+- When a reminder or preview shows, the app reads the current Color Filters settings (on/off and
+  filter type) and, before changing anything, saves them to a private restore journal at
+  `~/Library/Application Support/OpenHistory Focus/focus-color-filter-restore.json`, outside the
+  activity data folder so deleting data can't remove it first. Only then is grayscale written.
+  If the settings were already grayscale, nothing is changed or journaled.
+- When the reminder hides, is snoozed or dismissed, the session stops, the preview ends, the
+  style changes away from System, or the app quits, the earlier settings are put back exactly
+  (for example, a different filter left on stays on). If you changed Color Filters yourself
+  while the reminder showed, your change is kept. Either way the journal is then removed.
+- Writes are synchronous and happen on transitions; active reminders re-read the setting to notice manual changes. The status reports what
+  macOS says the setting is, not when the screen visibly changes.
+- If a turn-on fails, the reminder shows without grayscale and the page says so. If a restore
+  fails, the journal is kept, no new turn-on happens, and **Restore previous colors** retries.
+- **After a crash or force quit while gray, the screen stays gray until the app next opens**,
+  when restoration is attempted before new reminders, or until you switch Color Filters off in
+  System Settings.
+
+If the journal is unreadable, the app cannot safely infer your previous settings and leaves restoration to you in System Settings. Manual changes are detected from settings snapshots; changes away and back between observations cannot be distinguished.
+
+A possible future App Store-friendly alternative is Apple's public Shortcuts Color Filters
+action, run through user-made shortcuts. It is not implemented.
+
 ## Permissions
 
 - **Accessibility** powers OpenHistory's collector and every reminder.
-- **Screen Recording** is used only by the optional Grayscale window and Grayscale screen styles;
-  one grant covers both. The amber style needs
+- **Screen Recording** is used only by the optional Window and Screen grayscale; one grant covers
+  both. The amber edge and System grayscale need
   no Screen Recording: it picks its display from the front window's Accessibility geometry,
   falling back to on-screen window bounds for that process (bounds are available without Screen
   Recording). Access is checked without prompting. **Grant Screen Recording** asks macOS once per
@@ -275,8 +320,17 @@ CollectorService (Node): validate + privacy ──► FocusController ◄── 
 Data shapes (`src/shared/focus.ts`):
 
 - `Goal { id, title, why, currentFocus }`,
-  `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" | "grayscale_screen" }`.
-  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`.
+  `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" |
+  "grayscale_screen" | "grayscale_system", amberEdge }`.
+  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, and a missing
+  `amberEdge` as `true` only for the amber style.
+- Every reminder request carries `amberEdge`. For `grayscale_system` the native overlay captures
+  nothing; `SystemColorFilterController` (`src/main/system-color-filter.ts`) is the single,
+  synchronous owner of `SystemColorFilterSettings { enabled, type }` through the native
+  `SystemColorFilterBinding { read(), write(settings) }` (`systemColorFilterRead` /
+  `systemColorFilterWrite`), and of the journal `{ baseline, applied }`. `FocusController` derives
+  the wanted state from the visible reminder. The view reports
+  `systemFilter { available, phase: "idle" | "applied" | "restore_failed" | "unsupported", failure, restorePending }`.
 - A window-only reminder request also carries `domain`, the listed rule that matched, so the
   native side can confirm the focused window against later foreground evidence.
 - The view also reports `screenCapture { access, requested }` separately from browser detection,
@@ -344,8 +398,14 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   Drag it: the gray image should disappear while moving and return in place. During a session,
   open a listed site in one browser window and an unlisted site in another; only the listed
   window should turn gray, and switching to the other window should remove the gray image at
-  once. Drag the listed window across two displays; the reminder should switch to amber with
+  once. Drag the listed window across two displays; the reminder should lose its grayscale with
   "the window is on more than one display".
+- Manual check for System grayscale (packaged app, Screen Recording not granted): choose
+  **System** and press **Test reminder**. Every display, the card and the edge should turn gray,
+  then return to the earlier Color Filters settings about 8 s later. Repeat with a different
+  filter already on; it should come back. Toggle **Amber edge** during a session reminder: the
+  edge should appear or disappear without the session restarting. Quit while a reminder is gray:
+  colors should return before the app exits.
 
 Automated coverage includes domain anti-spoofing, malformed IPC and persistence, session expiry,
 snooze, dismiss, cooldown, re-entry, stale and out-of-order evidence, stale native actions,
@@ -381,6 +441,10 @@ gap labels, truncation limits, path traversal and symlinked files.
 - Grayscale is a captured image over a display or rectangular window area, not an OS color filter.
   Protected video may be blank, fast motion may lag, and overlapping content inside the window
   rectangle is also grayed. Popups extending outside that rectangle may remain in color.
+- System grayscale relies on private, unsupported macOS calls that may stop working. It affects
+  every display. A crash or force quit while it is on leaves the screen gray until the next
+  launch restores the journal. Changing the amber edge replaces a visible reminder, which briefly
+  restarts captured grayscale.
 - Idle time is not recorded in the timeline; only live idle suppresses reminders.
 - A day file written under a different time zone is shown under the date in its file name.
 - Chat still requires a cloud model.

@@ -59,7 +59,11 @@ export interface FocusMachineState {
   session: { status: "idle" } | ActiveSession;
   capability: FocusCapability;
   experience: FocusExperience;
+  /** Warm edge around the display, independent of grayscale. */
+  amberEdge: boolean;
   screenCapture: FocusScreenCaptureAccess;
+  /** The private Color Filters setting can be read on this Mac. */
+  systemFilterAvailable: boolean;
   effect?: ReminderEffect;
   /** Set only within the transition that replaced a visible reminder for a new style. */
   restyling?: boolean;
@@ -104,6 +108,7 @@ export type FocusInput =
   }
   | { type: "overlay_rejected"; now: number; nudgeId: string }
   | { type: "experience_changed"; now: number; experience: FocusExperience }
+  | { type: "amber_edge_changed"; now: number; amberEdge: boolean }
   | { type: "screen_capture"; now: number; access: FocusScreenCaptureAccess }
   | {
     type: "effect_status";
@@ -125,6 +130,7 @@ export type FocusEffect =
       expectedProcessIdentifier: number | null;
       preview: boolean;
       experience: FocusExperience;
+      amberEdge: boolean;
       /** The matched site rule, sent only for a window-only grayscale reminder. */
       domain?: string;
     };
@@ -139,13 +145,17 @@ export interface FocusTransition {
 export function initialFocusState(
   capability: FocusCapability,
   experience: FocusExperience = "amber",
-  screenCapture: FocusScreenCaptureAccess = "unsupported"
+  screenCapture: FocusScreenCaptureAccess = "unsupported",
+  amberEdge = true,
+  systemFilterAvailable = false
 ): FocusMachineState {
   return {
     session: { status: "idle" },
     capability,
     experience,
+    amberEdge,
     screenCapture,
+    systemFilterAvailable,
     idleSeconds: 0,
     nudgeCounter: 0,
     generationCounter: 0
@@ -237,7 +247,8 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
           message: input.copy.message,
           expectedProcessIdentifier: null,
           preview: true,
-          experience: beginEffect(state, input.previewId, true, now)
+          experience: beginEffect(state, input.previewId, true, now),
+          amberEdge: state.amberEdge
         }
       });
       break;
@@ -254,11 +265,12 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
     case "experience_changed":
       if (state.experience === input.experience) break;
       state.experience = input.experience;
-      if (state.preview) effects.push(hidePreview(state, true));
-      if (state.nudge) {
-        effects.push(hideNudge(state, true));
-        state.restyling = true;
-      }
+      restyle(state, effects);
+      break;
+    case "amber_edge_changed":
+      if (state.amberEdge === input.amberEdge) break;
+      state.amberEdge = input.amberEdge;
+      restyle(state, effects);
       break;
     case "screen_capture":
       state.screenCapture = input.access;
@@ -282,11 +294,25 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
   return { state, effects };
 }
 
+function restyle(state: FocusMachineState, effects: FocusEffect[]): void {
+  if (state.preview) effects.push(hidePreview(state, true));
+  if (state.nudge) {
+    effects.push(hideNudge(state, true));
+    state.restyling = true;
+  }
+}
+
 function beginEffect(state: FocusMachineState, nudgeId: string, preview: boolean, now: number): FocusExperience {
   const base = { nudgeId, requested: state.experience, preview, visible: true, updatedAt: now };
   if (state.experience === "amber") {
     state.effect = { ...base, status: "showing", fallbackReason: null };
     return "amber";
+  }
+  if (state.experience === "grayscale_system") {
+    state.effect = state.systemFilterAvailable
+      ? { ...base, status: "preparing", fallbackReason: null }
+      : { ...base, status: "fallback", fallbackReason: "system_filter_unavailable" };
+    return "grayscale_system";
   }
   if (state.screenCapture !== "granted") {
     state.effect = {
@@ -426,6 +452,7 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
       expectedProcessIdentifier: nudge.processIdentifier,
       preview: false,
       experience,
+      amberEdge: state.amberEdge,
       ...(experience === "grayscale_window" ? { domain: nudge.domain } : {})
     }
   });
@@ -527,6 +554,15 @@ export function effectView(state: FocusMachineState): FocusEffectState | null {
     visible: effect.visible,
     updatedAt: new Date(effect.updatedAt).toISOString()
   };
+}
+
+/**
+ * System grayscale should be on for a visible system grayscale reminder or preview that hasn't
+ * fallen back. A failed turn-on falls back, so it isn't retried until the next reminder.
+ */
+export function systemFilterWanted(state: FocusMachineState): boolean {
+  const effect = state.effect;
+  return Boolean(effect?.visible && effect.requested === "grayscale_system" && effect.status !== "fallback");
 }
 
 export function needsTimer(state: FocusMachineState): boolean {

@@ -11,6 +11,7 @@ import type {
 } from "./focus-controller";
 import { isForegroundEvidencePacket, parseForegroundEvidencePacket } from "./foreground-evidence";
 import { ActivityPrivacyFilter } from "./privacy-policy";
+import type { SystemColorFilterBinding, SystemColorFilterSettings } from "./system-color-filter";
 
 const MAX_RECENT_EVENTS = 250;
 const ACCESSIBILITY_CHECK_INTERVAL_MS = 1_000;
@@ -44,6 +45,8 @@ export interface NativeCollectorBinding {
   setFocusOverlayActionHandler?(handler: ((line: string) => void) | null): void;
   screenCaptureAccess?(): boolean;
   requestScreenCaptureAccess?(): boolean;
+  systemColorFilterRead?(): SystemColorFilterSettings | null;
+  systemColorFilterWrite?(enabled: boolean, type: number): boolean;
 }
 
 const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
@@ -233,6 +236,24 @@ export class CollectorService extends EventEmitter {
     return {
       access: () => screenCaptureAccess.call(native) === true,
       request: () => requestScreenCaptureAccess.call(native) === true
+    };
+  }
+
+  /** The private Color Filters calls, or undefined when the native module predates them. */
+  focusSystemFilter(): SystemColorFilterBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { systemColorFilterRead, systemColorFilterWrite } = native;
+    if (typeof systemColorFilterRead !== "function" || typeof systemColorFilterWrite !== "function") {
+      return undefined;
+    }
+    return {
+      read: () => systemColorFilterRead.call(native) ?? null,
+      write: (settings) => systemColorFilterWrite.call(native, settings.enabled, settings.type) === true
     };
   }
 

@@ -15,6 +15,8 @@ interface NativeBridge {
   setFocusOverlayActionHandler(handler: ((line: string) => void) | null): void;
   screenCaptureAccess(): boolean;
   requestScreenCaptureAccess(): boolean;
+  systemColorFilterRead(): { enabled: boolean; type: number } | null;
+  systemColorFilterWrite(enabled: boolean, type: number): boolean;
 }
 
 const root = resolve(import.meta.dirname, "..");
@@ -28,10 +30,15 @@ try {
   for (const name of [
     "startCollector", "stopCollector", "setForegroundObservation",
     "showFocusOverlay", "hideFocusOverlay", "setFocusOverlayActionHandler",
-    "screenCaptureAccess", "requestScreenCaptureAccess"
+    "screenCaptureAccess", "requestScreenCaptureAccess", "systemColorFilterRead", "systemColorFilterWrite"
   ] as const) {
     assert.equal(typeof bridge[name], "function", `bridge is missing ${name}`);
   }
+  // Read only: writing would change the person's persisted Color Filters settings.
+  const colorFilters = bridge.systemColorFilterRead();
+  assert(colorFilters === null ||
+    (typeof colorFilters.enabled === "boolean" && Number.isInteger(colorFilters.type)),
+    "Color Filters must read as settings, or null where the private setting is unavailable");
   // Never call requestScreenCaptureAccess here: it may show the system prompt.
   const screenCaptureAccess = bridge.screenCaptureAccess();
   assert.equal(typeof screenCaptureAccess, "boolean");
@@ -48,6 +55,16 @@ try {
     preview: false,
     experience: "grayscale_screen"
   })), 4, "a grayscale reminder for a process that is not frontmost must be refused before capture");
+  assert.equal(bridge.showFocusOverlay(JSON.stringify({
+    nudgeId: "smoke-system",
+    sessionId: "session-smoke",
+    title: "Smoke",
+    message: "",
+    expectedProcessIdentifier: 1,
+    preview: false,
+    experience: "grayscale_system",
+    amberEdge: false
+  })), 4, "a system grayscale reminder is a valid request and still requires the expected foreground process");
   const windowRequest = {
     nudgeId: "smoke-window",
     sessionId: "session-smoke",
@@ -119,7 +136,8 @@ try {
   bridge.setForegroundObservation(0);
   process.stdout.write(`Native bridge smoke passed: ${activity.map((event) => event.kind).join(", ")}; ` +
     `evidence ${evidence.map((packet) => packet.reason ?? packet.kind).join(", ")}; ` +
-    `accessibility trusted: ${bridge.isTrusted()}; screen recording allowed: ${screenCaptureAccess}\n`);
+    `accessibility trusted: ${bridge.isTrusted()}; screen recording allowed: ${screenCaptureAccess}; ` +
+    `color filters readable: ${colorFilters !== null}\n`);
 } finally {
   bridge.stopCollector();
   rmSync(resolve(dataDirectory, ".."), { recursive: true, force: true });

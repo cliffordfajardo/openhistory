@@ -43,17 +43,37 @@ export interface GoalDraft {
 }
 
 /**
- * How a reminder looks. `amber` draws a warm edge around the display. `grayscale_window` shows
- * only the distracting window in grayscale. `grayscale_screen` shows the entire display that holds
- * the distracting window in grayscale; other displays are unchanged.
+ * Which grayscale a reminder uses; the amber edge is the separate `amberEdge` preference. `amber`
+ * is the stored name for no grayscale, kept from before the two were independent.
+ * `grayscale_window` shows only the distracting window in grayscale. `grayscale_screen` shows the
+ * display that holds the distracting window in grayscale. `grayscale_system` switches macOS Color
+ * Filters to grayscale through a private system setting; that affects every display, the amber
+ * edge included, and needs no Screen Recording access.
  */
-export const FOCUS_EXPERIENCES = ["amber", "grayscale_window", "grayscale_screen"] as const;
+export const FOCUS_EXPERIENCES = ["amber", "grayscale_window", "grayscale_screen", "grayscale_system"] as const;
 export type FocusExperience = (typeof FOCUS_EXPERIENCES)[number];
 
 export interface FocusPreferences {
   domains: string[];
   durationMinutes: number;
   experience: FocusExperience;
+  /** Warm edge around the display, independent of grayscale. */
+  amberEdge: boolean;
+}
+
+/**
+ * System grayscale ownership. `applied`: this app switched Color Filters to grayscale and will put
+ * the earlier settings back. `restore_failed`: they couldn't be put back yet and are kept for a
+ * retry. Phases follow the settings macOS reports, not what is verified on screen.
+ */
+export interface FocusSystemFilterState {
+  /** The private Color Filters setting could be read on this Mac. */
+  available: boolean;
+  phase: "idle" | "applied" | "restore_failed" | "unsupported";
+  /** Why the last turn-on didn't happen; cleared by the next success. */
+  failure: "apply_failed" | "journal_unwritable" | null;
+  /** Earlier settings still wait to be restored, possibly from a previous launch. */
+  restorePending: boolean;
 }
 
 /** Whether macOS currently allows this app to capture the screen, checked without prompting. */
@@ -65,7 +85,7 @@ export interface FocusScreenCaptureState {
   requested: boolean;
 }
 
-/** Why a grayscale reminder showed the amber edge instead. */
+/** Why a reminder showed without its requested grayscale. */
 export type FocusEffectFallbackReason =
   | "permission_needed"
   | "unsupported"
@@ -73,11 +93,15 @@ export type FocusEffectFallbackReason =
   | "no_frame"
   | "display_unavailable"
   | "window_unavailable"
-  | "window_spans_displays";
+  | "window_spans_displays"
+  | "system_filter_failed"
+  | "system_filter_unavailable"
+  /** The person restored colors while this reminder was visible. */
+  | "system_filter_restored";
 
 /**
- * The visual effect of the latest reminder or preview. Grayscale stays "preparing" until the
- * native side reports its first captured frame on screen.
+ * The visual effect of the latest reminder or preview. Captured grayscale stays "preparing" until
+ * the native side reports its first frame on screen; system grayscale until its setting is written.
  */
 export interface FocusEffectState {
   requested: FocusExperience;
@@ -145,6 +169,7 @@ export interface FocusViewState {
   reminderVisible: boolean;
   lastReminderAt: string | null;
   screenCapture: FocusScreenCaptureState;
+  systemFilter: FocusSystemFilterState;
   effect: FocusEffectState | null;
   recoveredFromInvalidFile: boolean;
 }

@@ -64,6 +64,8 @@ export const IPC_CHANNELS = {
   resumeFocus: "openhistory:focus-resume",
   previewFocusReminder: "openhistory:focus-preview-reminder",
   setFocusExperience: "openhistory:focus-set-experience",
+  setFocusAmberEdge: "openhistory:focus-set-amber-edge",
+  restoreFocusSystemColors: "openhistory:focus-restore-system-colors",
   requestScreenCapture: "openhistory:focus-request-screen-capture",
   refreshScreenCapture: "openhistory:focus-refresh-screen-capture",
   openScreenCaptureSettings: "openhistory:focus-open-screen-capture-settings",
@@ -355,13 +357,16 @@ export interface OpenHistoryBridge {
   saveGoal(draft: GoalDraft): Promise<FocusViewState>;
   deleteGoal(id: string): Promise<FocusViewState>;
   selectGoal(id: string | null): Promise<FocusViewState>;
-  saveFocusPreferences(preferences: Omit<FocusPreferences, "experience">): Promise<FocusViewState>;
+  saveFocusPreferences(preferences: Pick<FocusPreferences, "domains" | "durationMinutes">): Promise<FocusViewState>;
   startFocus(request: FocusStartRequest): Promise<FocusViewState>;
   stopFocus(): Promise<FocusViewState>;
   snoozeFocus(): Promise<FocusViewState>;
   resumeFocus(): Promise<FocusViewState>;
   previewFocusReminder(): Promise<FocusViewState>;
   setFocusExperience(experience: FocusExperience): Promise<FocusViewState>;
+  setFocusAmberEdge(amberEdge: boolean): Promise<FocusViewState>;
+  /** Puts back the Color Filters settings from before system grayscale. */
+  restoreFocusSystemColors(): Promise<FocusViewState>;
   requestScreenCaptureAccess(): Promise<FocusViewState>;
   refreshScreenCaptureAccess(): Promise<FocusViewState>;
   openScreenCaptureSettings(): Promise<void>;

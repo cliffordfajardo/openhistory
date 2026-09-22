@@ -74,7 +74,12 @@
 .focus-site-form input { flex: 1; min-width: 0; }
 
 .focus-style { display: grid; gap: 12px; padding: 16px 18px; }
-.focus-style-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.focus-style-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.focus-edge-toggle { display: flex; align-items: flex-start; gap: 8px; }
+.focus-edge-toggle input { margin: 2px 0 0; accent-color: var(--focus-amber); }
+.focus-edge-toggle span { display: grid; gap: 2px; }
+.focus-edge-toggle strong { color: var(--focus-ink); font-size: 12px; }
+.focus-edge-toggle small { color: #777; font-size: 10.5px; line-height: 1.45; }
 .focus-style-option { display: grid; gap: 4px; padding: 10px 12px; color: inherit; text-align: left; background: rgba(255, 255, 255, .35); border: 1px solid rgba(0, 0, 0, .1); border-radius: 10px; }
 .focus-style-option strong { color: var(--focus-ink); font-size: 12px; }
 .focus-style-option span { color: #777; font-size: 10.5px; line-height: 1.45; }
@@ -165,6 +170,8 @@
   .focus-style-option span { color: #a5a5a5; }
   .focus-style-option:hover:not(:disabled) { background: rgba(255, 255, 255, .09); }
   .focus-style-permission .status-line { color: #e5e5e5; }
+  .focus-edge-toggle strong { color: #e5e5e5; }
+  .focus-edge-toggle small { color: #a5a5a5; }
   .focus-progress { background: rgba(255, 255, 255, .1); }
   .activity-day-step { color: #ccc; background: rgba(255, 255, 255, .06); border-color: rgba(238, 238, 238, .12); }
   .activity-day-list li { border-bottom-color: rgba(238, 238, 238, .08); }
@@ -183,6 +190,10 @@
 
 @media (prefers-reduced-transparency: reduce) {
   .focus-field input, .focus-field textarea, .focus-field select, .focus-site-form input { background: #fff; }
+}
+
+@media (max-width: 760px) {
+  .focus-style-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 520px) {

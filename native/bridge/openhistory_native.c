@@ -1,6 +1,8 @@
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
 #include <node_api.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -330,6 +332,120 @@ static napi_value request_screen_capture_access(napi_env env, napi_callback_info
     return boolean_value(env, CGRequestScreenCaptureAccess());
 }
 
+// macOS has no public API for the system Color Filters preference. These private symbols are
+// resolved with dlsym rather than linked so a missing or renamed symbol leaves the feature
+// unavailable instead of preventing the bridge from loading.
+#define SYSTEM_COLOR_FILTER_CATEGORY 1
+#define UNIVERSAL_ACCESS_DISPLAY_FILTER_WAKE 8
+
+typedef bool (*display_filter_get_enabled_function)(int);
+typedef void (*display_filter_set_enabled_function)(int, bool);
+typedef int (*display_filter_get_type_function)(int);
+typedef void (*display_filter_set_type_function)(int, int);
+typedef void (*universal_access_start_function)(int);
+
+static pthread_once_t display_filter_once = PTHREAD_ONCE_INIT;
+static bool display_filter_available = false;
+static display_filter_get_enabled_function display_filter_get_enabled = NULL;
+static display_filter_set_enabled_function display_filter_set_enabled = NULL;
+static display_filter_get_type_function display_filter_get_type = NULL;
+static display_filter_set_type_function display_filter_set_type = NULL;
+static universal_access_start_function universal_access_start = NULL;
+
+static void load_display_filter_symbols(void) {
+    void *media_accessibility = dlopen(
+        "/System/Library/Frameworks/MediaAccessibility.framework/MediaAccessibility",
+        RTLD_LAZY | RTLD_LOCAL
+    );
+    void *universal_access = dlopen("/usr/lib/libUniversalAccess.dylib", RTLD_LAZY | RTLD_LOCAL);
+    if (media_accessibility != NULL && universal_access != NULL) {
+        display_filter_get_enabled = (display_filter_get_enabled_function)dlsym(
+            media_accessibility, "MADisplayFilterPrefGetCategoryEnabled");
+        display_filter_set_enabled = (display_filter_set_enabled_function)dlsym(
+            media_accessibility, "MADisplayFilterPrefSetCategoryEnabled");
+        display_filter_get_type = (display_filter_get_type_function)dlsym(
+            media_accessibility, "MADisplayFilterPrefGetType");
+        display_filter_set_type = (display_filter_set_type_function)dlsym(
+            media_accessibility, "MADisplayFilterPrefSetType");
+        universal_access_start = (universal_access_start_function)dlsym(
+            universal_access, "_UniversalAccessDStart");
+    }
+    display_filter_available = display_filter_get_enabled != NULL &&
+        display_filter_set_enabled != NULL &&
+        display_filter_get_type != NULL &&
+        display_filter_set_type != NULL &&
+        universal_access_start != NULL;
+    if (display_filter_available) return;
+
+    display_filter_get_enabled = NULL;
+    display_filter_set_enabled = NULL;
+    display_filter_get_type = NULL;
+    display_filter_set_type = NULL;
+    universal_access_start = NULL;
+    if (media_accessibility != NULL) dlclose(media_accessibility);
+    if (universal_access != NULL) dlclose(universal_access);
+}
+
+static bool display_filter_symbols_loaded(void) {
+    return pthread_once(&display_filter_once, load_display_filter_symbols) == 0 &&
+        display_filter_available;
+}
+
+static napi_value system_color_filter_read(napi_env env, napi_callback_info info) {
+    (void)info;
+    napi_value result;
+    if (!display_filter_symbols_loaded()) {
+        if (napi_get_null(env, &result) != napi_ok) return NULL;
+        return result;
+    }
+    bool enabled = display_filter_get_enabled(SYSTEM_COLOR_FILTER_CATEGORY);
+    int type = display_filter_get_type(SYSTEM_COLOR_FILTER_CATEGORY);
+
+    napi_value enabled_value = boolean_value(env, enabled);
+    napi_value type_value;
+    if (enabled_value == NULL ||
+        napi_create_int32(env, (int32_t)type, &type_value) != napi_ok ||
+        napi_create_object(env, &result) != napi_ok ||
+        napi_set_named_property(env, result, "enabled", enabled_value) != napi_ok ||
+        napi_set_named_property(env, result, "type", type_value) != napi_ok) {
+        return NULL;
+    }
+    return result;
+}
+
+static napi_value system_color_filter_write(napi_env env, napi_callback_info info) {
+    size_t argument_count = 2;
+    napi_value arguments[2];
+    if (napi_get_cb_info(env, info, &argument_count, arguments, NULL, NULL) != napi_ok) return NULL;
+    if (argument_count != 2) {
+        napi_throw_type_error(env, NULL, "systemColorFilterWrite requires an enabled flag and a filter type");
+        return NULL;
+    }
+    bool enabled = false;
+    if (napi_get_value_bool(env, arguments[0], &enabled) != napi_ok) {
+        napi_throw_type_error(env, NULL, "systemColorFilterWrite enabled flag must be a boolean");
+        return NULL;
+    }
+    napi_valuetype type_kind;
+    double requested_type = 0;
+    if (napi_typeof(env, arguments[1], &type_kind) != napi_ok || type_kind != napi_number ||
+        napi_get_value_double(env, arguments[1], &requested_type) != napi_ok ||
+        !(requested_type >= INT32_MIN && requested_type <= INT32_MAX) ||
+        requested_type != (double)(int32_t)requested_type) {
+        napi_throw_type_error(env, NULL, "systemColorFilterWrite filter type must be a 32-bit integer");
+        return NULL;
+    }
+    int type = (int)(int32_t)requested_type;
+
+    if (!display_filter_symbols_loaded()) return boolean_value(env, false);
+    display_filter_set_type(SYSTEM_COLOR_FILTER_CATEGORY, type);
+    display_filter_set_enabled(SYSTEM_COLOR_FILTER_CATEGORY, enabled);
+    universal_access_start(UNIVERSAL_ACCESS_DISPLAY_FILTER_WAKE);
+    bool matches = display_filter_get_type(SYSTEM_COLOR_FILTER_CATEGORY) == type &&
+        display_filter_get_enabled(SYSTEM_COLOR_FILTER_CATEGORY) == enabled;
+    return boolean_value(env, matches);
+}
+
 static napi_value process_identifier(napi_env env, napi_callback_info info) {
     (void)info;
     napi_value result;
@@ -389,6 +505,8 @@ NAPI_MODULE_INIT() {
         { "requestTrust", NULL, request_trust, NULL, NULL, NULL, napi_default, NULL },
         { "screenCaptureAccess", NULL, screen_capture_access, NULL, NULL, NULL, napi_default, NULL },
         { "requestScreenCaptureAccess", NULL, request_screen_capture_access, NULL, NULL, NULL, napi_default, NULL },
+        { "systemColorFilterRead", NULL, system_color_filter_read, NULL, NULL, NULL, napi_default, NULL },
+        { "systemColorFilterWrite", NULL, system_color_filter_write, NULL, NULL, NULL, napi_default, NULL },
         { "processIdentifier", NULL, process_identifier, NULL, NULL, NULL, napi_default, NULL },
         { "canReadFocusedApplication", NULL, can_read_focused_application, NULL, NULL, NULL, napi_default, NULL },
         { "bundleIdentifier", NULL, bundle_identifier, NULL, NULL, NULL, napi_default, NULL }

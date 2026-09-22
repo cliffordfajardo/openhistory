@@ -18,7 +18,7 @@ test("starts empty, creates goals privately and selects the first one", async (c
     version: 1,
     goals: [],
     selectedGoalId: null,
-    preferences: { domains: [], durationMinutes: 25, experience: "amber" }
+    preferences: { domains: [], durationMinutes: 25, experience: "amber", amberEdge: true }
   });
 
   const { goal } = store.saveGoal({ title: "  Ship\tthe   guide ", why: "Readers\r\nare waiting", currentFocus: "Outline" });
@@ -54,11 +54,57 @@ test("edits, selects and deletes goals without leaving a dangling selection", as
 test("persists normalized distracting sites and duration", async (context) => {
   const directory = await testDirectory(context);
   const store = new FocusStore(directory);
-  store.savePreferences({ domains: ["video.example", "social.example"], durationMinutes: 50, experience: "amber" });
+  store.savePreferences({
+    domains: ["video.example", "social.example"],
+    durationMinutes: 50,
+    experience: "amber",
+    amberEdge: true
+  });
   assert.deepEqual(new FocusStore(directory).load().preferences, {
     domains: ["social.example", "video.example"],
     durationMinutes: 50,
-    experience: "amber"
+    experience: "amber",
+    amberEdge: true
+  });
+});
+
+test("files from before the separate amber edge keep their look", async (context) => {
+  for (const [experience, amberEdge] of [
+    [undefined, true],
+    ["amber", true],
+    ["grayscale_window", false],
+    ["grayscale_screen", false]
+  ] as const) {
+    const directory = await testDirectory(context);
+    const legacy = JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: ["video.example"], durationMinutes: 25, ...(experience ? { experience } : {}) }
+    });
+    writeFileSync(resolve(directory, "focus.json"), legacy);
+    const store = new FocusStore(directory);
+    assert.equal(store.recoveredFromInvalidFile, false);
+    assert.deepEqual(store.load().preferences, {
+      domains: ["video.example"],
+      durationMinutes: 25,
+      experience: experience ?? "amber",
+      amberEdge
+    }, String(experience));
+    assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
+  }
+});
+
+test("persists the amber edge independently of the grayscale choice", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FocusStore(directory);
+  store.updatePreferences({ experience: "grayscale_system", amberEdge: false });
+  store.updatePreferences({ experience: "grayscale_screen" });
+  assert.deepEqual(new FocusStore(directory).load().preferences, {
+    domains: [],
+    durationMinutes: 25,
+    experience: "grayscale_screen",
+    amberEdge: false
   });
 });
 
@@ -77,7 +123,12 @@ test("reads files saved before reminder styles as amber without losing goals or 
     version: 1,
     goals: [{ id: "goal-00000001-test", title: "Kept", why: "Because", currentFocus: "Now" }],
     selectedGoalId: "goal-00000001-test",
-    preferences: { domains: ["video.example"], durationMinutes: 50, experience: "amber" }
+    preferences: {
+      domains: ["video.example"],
+      durationMinutes: 50,
+      experience: "amber",
+      amberEdge: true
+    }
   });
   assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   assert.deepEqual(readdirSync(directory), ["focus.json"]);
@@ -128,6 +179,12 @@ test("recovers from malformed files by starting fresh and preserving the origina
       goals: [],
       selectedGoalId: null,
       preferences: { domains: [], durationMinutes: 25, experience: "sepia" }
+    }),
+    JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, amberEdge: "yes" }
     })
   ]) {
     const directory = await testDirectory(context);

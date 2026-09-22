@@ -8,7 +8,8 @@ import { writePrivateFile } from "./private-storage";
 export const DEFAULT_FOCUS_PREFERENCES: FocusPreferences = {
   domains: [],
   durationMinutes: 25,
-  experience: "amber"
+  experience: "amber",
+  amberEdge: true
 };
 
 const MAX_FOCUS_FILE_BYTES = 512 * 1_024;
@@ -100,7 +101,11 @@ export class FocusStore {
   }
 
   setExperience(experience: FocusExperience): FocusDocument {
-    return this.write({ ...this.document, preferences: { ...this.document.preferences, experience } });
+    return this.updatePreferences({ experience });
+  }
+
+  updatePreferences(changes: Partial<FocusPreferences>): FocusDocument {
+    return this.write({ ...this.document, preferences: { ...this.document.preferences, ...changes } });
   }
 
   private write(next: FocusDocument): FocusDocument {

@@ -70,16 +70,20 @@ const FOREGROUND_COPY: Record<FocusForegroundSummary, string> = {
 
 const EXPERIENCE_COPY: Record<FocusExperience, { label: string; detail: string }> = {
   amber: {
-    label: "Amber edge",
-    detail: "A soft amber glow around the display with the distracting window. No extra permission."
+    label: "None",
+    detail: "Colors stay as they are. No extra permission."
   },
   grayscale_window: {
-    label: "Grayscale window",
+    label: "Window",
     detail: "The distracting window’s area turns gray while the reminder shows. The rest of the display stays in color. Needs Screen Recording."
   },
   grayscale_screen: {
-    label: "Grayscale screen",
+    label: "Screen",
     detail: "The entire display with the distracting window turns gray while the reminder shows. Other displays stay in color. Needs Screen Recording."
+  },
+  grayscale_system: {
+    label: "System",
+    detail: "Experimental. Turns on macOS Color Filters through a private setting: every display turns gray, including the card and amber edge. No Screen Recording."
   }
 };
 
@@ -90,18 +94,25 @@ const FALLBACK_COPY: Record<FocusEffectFallbackReason, string> = {
   no_frame: "no screen image arrived in time",
   display_unavailable: "the display changed or couldn’t be found",
   window_unavailable: "the distracting window couldn’t be matched or followed exactly",
-  window_spans_displays: "the window is on more than one display"
+  window_spans_displays: "the window is on more than one display",
+  system_filter_failed: "Color Filters couldn’t be changed",
+  system_filter_unavailable: "system grayscale isn’t available on this Mac",
+  system_filter_restored: "you restored colors"
 };
 
-function effectStatusCopy(effect: FocusEffectState): string | undefined {
+function effectStatusCopy(effect: FocusEffectState, amberEdge: boolean): string | undefined {
   const subject = effect.preview ? "preview" : "reminder";
   if (effect.status === "fallback") {
     const reason = FALLBACK_COPY[effect.fallbackReason ?? "capture_failed"];
+    const shown = amberEdge ? "the card and amber edge" : "only the card";
     return effect.visible
-      ? `Grayscale didn’t start (${reason}), so this ${subject} uses the amber edge.`
-      : `The last grayscale ${subject} used the amber edge instead: ${reason}.`;
+      ? `Grayscale isn’t on (${reason}), so this ${subject} shows ${shown}.`
+      : `The last ${subject} showed without grayscale: ${reason}.`;
   }
   if (!effect.visible || effect.requested === "amber") return undefined;
+  if (effect.requested === "grayscale_system") {
+    return `macOS reports Color Filters set to grayscale for this ${subject}.`;
+  }
   return effect.status === "preparing"
     ? `Starting grayscale for this ${subject}…`
     : `Grayscale is showing for this ${subject}.`;
@@ -390,6 +401,9 @@ async function previewReminder(setState: SetAppState): Promise<string> {
   });
   if (failure) return failure;
   if (requested === "amber") return "Preview shown on this display for about 8 seconds.";
+  if (requested === "grayscale_system") {
+    return "Preview shown for about 8 seconds; your earlier colors return afterward. Status is under Reminder style.";
+  }
   return requested === "grayscale_window"
     ? "Preview shown for about 8 seconds. This window stands in for the distracting one. Grayscale status is under Reminder style."
     : "Preview card shown on this display for about 8 seconds. Grayscale status is under Reminder style.";
@@ -404,14 +418,25 @@ function ReminderStyleCard({
 }): React.JSX.Element {
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
-  const experience = focus.preferences.experience;
+  const { experience, amberEdge } = focus.preferences;
   const access = focus.screenCapture.access;
-  const effectCopy = focus.effect ? effectStatusCopy(focus.effect) : undefined;
+  const effectCopy = focus.effect ? effectStatusCopy(focus.effect, amberEdge) : undefined;
+  const capture = experience === "grayscale_window" || experience === "grayscale_screen";
+  const systemFilter = focus.systemFilter;
+  const showSystemStatus = experience === "grayscale_system" || systemFilter.restorePending ||
+    systemFilter.phase === "restore_failed";
 
   async function choose(next: FocusExperience): Promise<void> {
     if (next === experience || saving) return;
     setSaving(true);
     setError(await focusAction(setState, () => window.openHistory.setFocusExperience(next)));
+    setSaving(false);
+  }
+
+  async function setEdge(next: boolean): Promise<void> {
+    if (saving) return;
+    setSaving(true);
+    setError(await focusAction(setState, () => window.openHistory.setFocusAmberEdge(next)));
     setSaving(false);
   }
 
@@ -433,15 +458,28 @@ function ReminderStyleCard({
       <div className="focus-card-heading">
         <div>
           <strong>Reminder style</strong>
-          <span>Every style shows the same reminder card with Snooze and Dismiss. Changes apply right away, even during a session.</span>
+          <span>Every reminder shows the same card with Snooze and Dismiss. Changes apply right away, even during a session.</span>
         </div>
       </div>
-      <div className="focus-style-options" role="radiogroup" aria-label="Reminder style">
+      <label className="focus-edge-toggle">
+        <input
+          checked={amberEdge}
+          disabled={saving}
+          onChange={(event) => void setEdge(event.target.checked)}
+          type="checkbox"
+        />
+        <span>
+          <strong>Amber edge</strong>
+          <small>A soft amber glow around the display with the distracting window. Works with any grayscale choice.</small>
+        </span>
+      </label>
+      <p className="focus-quiet" id="focus-grayscale-label">Grayscale while a reminder shows</p>
+      <div className="focus-style-options" role="radiogroup" aria-labelledby="focus-grayscale-label">
         {(Object.keys(EXPERIENCE_COPY) as FocusExperience[]).map((option) => (
           <button
             aria-checked={experience === option}
             className={experience === option ? "focus-style-option active" : "focus-style-option"}
-            disabled={saving}
+            disabled={saving || (option === "grayscale_system" && experience !== option && !systemFilter.available)}
             key={option}
             onClick={() => void choose(option)}
             role="radio"
@@ -452,15 +490,16 @@ function ReminderStyleCard({
           </button>
         ))}
       </div>
-      {experience !== "amber" ? (
+      {showSystemStatus ? <SystemFilterStatus focus={focus} setState={setState} /> : null}
+      {capture ? (
         <div className="focus-style-permission">
           <div className="status-line">
             <span className={`status-light ${access === "granted" ? "running" : "failed"}`} />
             {access === "granted"
               ? "Screen Recording allowed"
               : access === "not_granted"
-                ? "Screen Recording not allowed — reminders use the amber edge"
-                : "Grayscale isn’t available in this build — reminders use the amber edge"}
+                ? "Screen Recording not allowed — reminders show without grayscale"
+                : "Captured grayscale isn’t available in this build — reminders show without it"}
           </div>
           {access === "not_granted" ? (
             <>
@@ -490,6 +529,59 @@ function ReminderStyleCard({
       ) : null}
       {effectCopy ? <p className="focus-foreground" aria-live="polite">{effectCopy}</p> : null}
       {error ? <InlineError>{error}</InlineError> : null}
+    </div>
+  );
+}
+
+const SYSTEM_FILTER_STATUS_COPY: Record<FocusViewState["systemFilter"]["phase"], string> = {
+  idle: "Your Color Filters settings are unchanged.",
+  applied: "System grayscale is on; your earlier Color Filters settings return when the reminder ends.",
+  restore_failed: "Your earlier Color Filters settings couldn’t be restored yet. System grayscale waits until they are.",
+  unsupported: "System grayscale isn’t available on this Mac. Reminders show without it."
+};
+
+function SystemFilterStatus({
+  focus,
+  setState
+}: {
+  focus: FocusViewState;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const { phase, failure, restorePending } = focus.systemFilter;
+
+  async function restore(): Promise<void> {
+    setBusy(true);
+    setError(await focusAction(setState, () => window.openHistory.restoreFocusSystemColors()));
+    setBusy(false);
+  }
+
+  return (
+    <div className="focus-style-permission">
+      <div className="status-line" aria-live="polite">
+        <span className={`status-light ${phase === "restore_failed" || phase === "unsupported" || failure ? "failed" : "running"}`} />
+        {SYSTEM_FILTER_STATUS_COPY[phase]}
+      </div>
+      {failure ? (
+        <p className="focus-quiet">
+          {failure === "journal_unwritable"
+            ? "The last reminder left colors alone because your settings couldn’t be saved for restoring."
+            : "The last reminder couldn’t change Color Filters."}
+        </p>
+      ) : null}
+      <p className="focus-quiet">
+        Experimental: uses a private macOS setting that may stop working in a future macOS. It affects every display and is
+        restored when the reminder ends or the app quits; after a crash, on the next launch.
+      </p>
+      {error ? <InlineError>{error}</InlineError> : null}
+      {restorePending || phase === "applied" ? (
+        <div className="focus-actions">
+          <button className="secondary-button" disabled={busy} onClick={() => void restore()} type="button">
+            Restore previous colors
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

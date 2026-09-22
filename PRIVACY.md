@@ -15,7 +15,9 @@ Last updated: August 16, 2026
 > the whole display (Grayscale screen) in gray. Those
 > frames stay transient in memory and GPU buffers: they are never saved, logged, analyzed, sent
 > to a model or uploaded, and are released when the reminder hides. Activity capture itself still
-> takes no screenshots. Goals and Focus preferences are stored in the same private folder, are
+> takes no screenshots. The optional **System** grayscale captures nothing: it switches macOS
+> Color Filters through a private system setting and keeps only your earlier filter settings in a
+> small restore journal outside the data folder until they are restored. Goals and Focus preferences are stored in the same private folder, are
 > removed by "Delete all local data", and are not sent to models or exposed through MCP. The
 > upstream auto-updater is disabled. See [docs/FOCUS.md](docs/FOCUS.md). Where this note and the
 > policy below differ, this note describes the fork.
