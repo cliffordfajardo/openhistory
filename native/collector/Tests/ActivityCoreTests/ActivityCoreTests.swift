@@ -2,6 +2,53 @@ import Foundation
 import Testing
 @testable import ActivityCore
 
+@Test func webmailFocusProtectionIsIndependentOfRecordingProtection() throws {
+    let gmail = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://mail.google.com/mail/u/0/#inbox", title: nil
+    ))
+    let normal = SemanticProtectionPolicy.browserProtectionStates(
+        observation: gmail, windowTitle: "Inbox", captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    #expect(normal.recording == .protected)
+    #expect(normal.focus == .safe)
+    let privateWindow = SemanticProtectionPolicy.browserProtectionStates(
+        observation: gmail, windowTitle: "New Tab - Incognito", captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    #expect(privateWindow.recording == .protected)
+    #expect(privateWindow.focus == .protected)
+    let missing = SemanticProtectionPolicy.browserProtectionStates(
+        observation: nil, windowTitle: nil, captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    #expect(missing.recording == .unavailable)
+    #expect(missing.focus == .unavailable)
+    for (url, expected) in [
+        ("https://pornhub.com/private", BrowserProtectionObservation.protected),
+        ("https://app.slack.com/client", .protected),
+        ("https://messages.google.com/web", .protected),
+        ("https://example.com/work", .safe)
+    ] {
+        let observation = try #require(SemanticSanitizer.browserObservation(rawURL: url, title: nil))
+        let states = SemanticProtectionPolicy.browserProtectionStates(
+            observation: observation, windowTitle: nil, captureEmailActivity: false,
+            captureMessagingActivity: false
+        )
+        #expect(states.recording == expected)
+        #expect(states.focus == expected)
+    }
+    let chat = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://app.slack.com/client", title: nil
+    ))
+    let optedIn = SemanticProtectionPolicy.browserProtectionStates(
+        observation: chat, windowTitle: nil, captureEmailActivity: false,
+        captureMessagingActivity: true
+    )
+    #expect(optedIn.recording == .safe)
+    #expect(optedIn.focus == .safe)
+}
+
 @Test func unavailableBrowserURLSuppressesCaptureWithoutCreatingAPrivacyTransition() {
     let decision = SemanticProtectionPolicy.browserProtectionDecision(
         for: .unavailable,

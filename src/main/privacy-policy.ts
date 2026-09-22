@@ -151,6 +151,21 @@ export function isProtectedActivityEvent(
     isSensitiveTextField(event.element);
 }
 
+export function isProtectedFocusHost(
+  domain: string,
+  bundleIdentifier: string,
+  options: { captureMessagingActivity: boolean }
+): boolean {
+  const application = { bundleIdentifier, localizedName: null, processIdentifier: 1 };
+  return !isBrowserEvent({ application }) ||
+    isProtectedAdultWebDomain(domain) ||
+    isProtectedActivityEvent({
+      kind: "url_changed",
+      application,
+      browser: { url: `https://${domain}/`, domain }
+    }, { captureEmailActivity: true, captureMessagingActivity: options.captureMessagingActivity });
+}
+
 function isMessagingBrowserObservation(browser: ActivityEvent["browser"]): boolean {
   if (!browser) return false;
   const domain = normalizeDomain(browser.domain);

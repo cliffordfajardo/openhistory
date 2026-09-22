@@ -39,6 +39,35 @@ private func context(
     #expect(decision.domain == "news.example.com")
 }
 
+@Test func webmailHostIsVisibleOnlyForSafeFocusStateAndEnabledBrowserURLs() throws {
+    let gmail = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://mail.google.com/mail/u/0/#inbox", title: nil
+    ))
+    let states = SemanticProtectionPolicy.browserProtectionStates(
+        observation: gmail, windowTitle: "Inbox", captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    let decision = ForegroundEvidenceClassifier.classify(context(
+        browserState: states.focus, browserDomain: gmail.domain
+    ))
+    #expect(decision.kind == .browser)
+    #expect(decision.domain == "mail.google.com")
+    let privateStates = SemanticProtectionPolicy.browserProtectionStates(
+        observation: gmail, windowTitle: "Incognito", captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    let privateDecision = ForegroundEvidenceClassifier.classify(context(
+        browserState: privateStates.focus, browserDomain: gmail.domain
+    ))
+    #expect(privateDecision.kind == .unknown)
+    #expect(privateDecision.domain == nil)
+    let disabled = ForegroundEvidenceClassifier.classify(context(
+        captureBrowserURLs: false, browserState: states.focus, browserDomain: gmail.domain
+    ))
+    #expect(disabled.reason == .urlCaptureOff)
+    #expect(disabled.domain == nil)
+}
+
 @Test func chromeWebAppEvidenceNeedsARecognizedBundleAndSafeReadableURL() {
     let valid = "com.google.Chrome.app." + String(repeating: "a", count: 32)
     let invalid = "com.google.Chrome.app." + String(repeating: "a", count: 31)

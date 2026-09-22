@@ -84,7 +84,7 @@ private struct PendingTextEdit {
 private struct BrowserContext {
     let observation: BrowserObservation?
     let isProtected: Bool
-    var state: BrowserProtectionObservation? = nil
+    var focusState: BrowserProtectionObservation? = nil
 }
 
 final class ApplicationActivityCollector: @unchecked Sendable {
@@ -552,13 +552,15 @@ final class ApplicationActivityCollector: @unchecked Sendable {
     ) -> BrowserContext {
         guard let bundleIdentifier = application.bundleIdentifier,
               readsBrowserURL(bundleIdentifier: bundleIdentifier) else {
-            return BrowserContext(observation: nil, isProtected: false, state: nil)
+            return BrowserContext(observation: nil, isProtected: false, focusState: nil)
         }
-        if SemanticProtectionPolicy.protectsPrivateBrowsingWindow(title: windowTitle) {
+        let privateWindow = SemanticProtectionPolicy.protectsPrivateBrowsingWindow(title: windowTitle)
+        if privateWindow {
             return applyBrowserProtection(
                 .protected,
                 observation: nil,
-                processIdentifier: application.processIdentifier
+                processIdentifier: application.processIdentifier,
+                focusState: .protected
             )
         }
         guard let rawURL,
@@ -573,22 +575,25 @@ final class ApplicationActivityCollector: @unchecked Sendable {
                 processIdentifier: application.processIdentifier
             )
         }
-        let protected = SemanticProtectionPolicy.protectsBrowserObservation(
-            observation,
+        let states = SemanticProtectionPolicy.browserProtectionStates(
+            observation: observation,
+            windowTitle: windowTitle,
             captureEmailActivity: configuration.emailActivity,
             captureMessagingActivity: configuration.messagingActivity
         )
         return applyBrowserProtection(
-            protected ? .protected : .safe,
+            states.recording,
             observation: observation,
-            processIdentifier: application.processIdentifier
+            processIdentifier: application.processIdentifier,
+            focusState: states.focus
         )
     }
 
     private func applyBrowserProtection(
         _ observationState: BrowserProtectionObservation,
         observation: BrowserObservation?,
-        processIdentifier: pid_t
+        processIdentifier: pid_t,
+        focusState: BrowserProtectionObservation? = nil
     ) -> BrowserContext {
         let decision = SemanticProtectionPolicy.browserProtectionDecision(
             for: observationState,
@@ -605,7 +610,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
         return BrowserContext(
             observation: observation,
             isProtected: decision.suppressCapture,
-            state: observationState
+            focusState: focusState ?? observationState
         )
     }
 
@@ -636,7 +641,7 @@ final class ApplicationActivityCollector: @unchecked Sendable {
             isRecognizedBrowser: bundleIdentifier.map {
                 SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: $0)
             } ?? false,
-            browserState: sampledIsFrontmost ? browserContext?.state : nil,
+            browserState: sampledIsFrontmost ? browserContext?.focusState : nil,
             browserDomain: sampledIsFrontmost ? browserContext?.observation?.domain : nil
         )
         let decision = ForegroundEvidenceClassifier.classify(context)

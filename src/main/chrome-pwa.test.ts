@@ -6,7 +6,7 @@ import { filterProtectedActivityEvents, isBrowserEvent } from "./privacy-policy"
 
 const appId = "abcdefghijklmnopabcdefghijklmnop";
 const pwaBundle = `com.google.Chrome.app.${appId}`;
-const privacy = { captureEmailActivity: false, captureMessagingActivity: false };
+const privacy = { captureMessagingActivity: false };
 
 function event(id: string, kind: ActivityEvent["kind"], values: Partial<ActivityEvent> = {}): ActivityEvent {
   return {
@@ -64,7 +64,8 @@ test("PWA foreground evidence uses the observed host and fails closed for protec
   const lookalike = parseForegroundEvidencePacket(packet(pwaBundle, "youtube.com.evil.example"), privacy);
   assert.equal(lookalike?.kind === "browser" ? lookalike.domain : undefined, "youtube.com.evil.example");
 
-  for (const domain of ["pornhub.com", "mail.google.com", "app.slack.com"]) {
+  assert.equal(parseForegroundEvidencePacket(packet(pwaBundle, "mail.google.com"), privacy)?.kind, "browser");
+  for (const domain of ["pornhub.com", "app.slack.com"]) {
     const protectedResult = parseForegroundEvidencePacket(packet(pwaBundle, domain), privacy);
     assert.equal(protectedResult?.kind, "unknown", domain);
     assert.equal(protectedResult?.kind === "unknown" ? protectedResult.reason : undefined, "protected_context");

@@ -34,6 +34,23 @@ test("recognizes secure web fields and password metadata", () => {
   assert.equal(isSensitiveTextField({ role: "AXSearchField", label: "Search project notes" }), false);
 });
 
+test("email activity remains absent from history when webmail can be a Focus target", () => {
+  const filtered = filterProtectedActivityEvents([
+    browserEvent("mail-url", "2026-08-15T09:00:00Z", "url_changed", {
+      browser: { url: "https://mail.google.com/mail/u/0/#inbox", domain: "mail.google.com" }
+    }),
+    browserEvent("mail-window", "2026-08-15T09:00:01Z", "window_changed", {
+      windowTitle: "Inbox - Gmail"
+    }),
+    browserEvent("mail-text", "2026-08-15T09:00:02Z", "text_input", {
+      windowTitle: "Inbox - Gmail",
+      textChange: { insertedText: "arbitrary-canary-message", deletedCharacterCount: 0, resultingValue: "arbitrary-canary-message" }
+    })
+  ], { captureEmailActivity: false });
+  assert.equal(filtered.some((event) => ["mail-url", "mail-window", "mail-text"].includes(event.id)), false);
+  assert.doesNotMatch(JSON.stringify(filtered), /mail\.google\.com|arbitrary-canary-message|Inbox - Gmail/);
+});
+
 test("replaces an adult browsing interval with content-free boundaries", () => {
   const filtered = filterProtectedActivityEvents([
     browserEvent("safe-before", "2026-08-15T09:00:00Z", "url_changed", {

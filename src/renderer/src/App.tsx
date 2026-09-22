@@ -1300,7 +1300,7 @@ function PrivacyOnboarding({ onAccept }: { onAccept: () => Promise<void> }): Rea
       </div>
       <ul>
         <li><strong>Stored locally.</strong> Activity, goals and any summaries live in a private data folder on this Mac, separate from upstream OpenHistory.</li>
-        <li><strong>Nudges, not blocking.</strong> During a Focus session, a listed site in front brings up a gentle reminder. Detected private windows and protected pages are excluded. Private-window detection depends on the browser’s accessibility information.</li>
+        <li><strong>Nudges, not blocking.</strong> During a Focus session, a listed site in front brings up a gentle reminder. Webmail can trigger a reminder from its site name even when email activity is excluded from history. Detected private windows and protected pages are excluded. Private-window detection depends on the browser’s accessibility information.</li>
         <li><strong>Summaries are optional.</strong> You can keep everything local with summaries off. Cloud models receive activity only after a separate confirmation.</li>
         <li><strong>Visible and reversible.</strong> Pause capture in the header, exclude apps in Settings, inspect the data folder, or permanently delete all local data.</li>
       </ul>
@@ -2022,7 +2022,7 @@ function PermissionsPage({
           <p className="protected-note">
             {state.settings.captureEmailActivity
               ? "Email apps and webmail can be included. "
-              : "Email apps and webmail are excluded. "}
+              : "Email apps and webmail are excluded from activity history. Focus can still recognize a listed webmail site by its name alone. "}
             {state.settings.captureMessagingActivity
               ? "Messages, including iMessage, and recognized chat apps and websites can be included. "
               : "Messages, including iMessage, and recognized chat apps and websites are excluded. "}

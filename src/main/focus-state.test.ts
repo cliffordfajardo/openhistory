@@ -119,6 +119,14 @@ test("unlisted sites, spoofed hosts and other apps never show a reminder", () =>
   assert.equal(foregroundSummary(harness.state, T0 + 4_000), "other_app");
 });
 
+test("webmail host matches a Focus rule, then private-window evidence hides the reminder", () => {
+  const harness = new Harness();
+  harness.start();
+  harness.send({ type: "domains_changed", now: T0 + 100, domains: ["mail.google.com"] });
+  assert.equal(shows(harness.browser(T0 + 1_000, "mail.google.com")).length, 1);
+  assert.equal(hides(harness.unknown(T0 + 2_000, "protected_context")).length, 1);
+});
+
 test("stale, future, wrong-generation and out-of-order evidence cannot nudge", () => {
   const harness = new Harness();
   harness.start();

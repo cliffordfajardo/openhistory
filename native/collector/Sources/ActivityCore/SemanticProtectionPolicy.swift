@@ -151,6 +151,17 @@ public enum SemanticProtectionPolicy {
             (domainMatches(domain, "reddit.com") && path.hasPrefix("/message"))
     }
 
+    public static func protectsFocusBrowserObservation(
+        _ observation: BrowserObservation,
+        captureMessagingActivity: Bool = false
+    ) -> Bool {
+        protectsBrowserObservation(
+            observation,
+            captureEmailActivity: true,
+            captureMessagingActivity: captureMessagingActivity
+        )
+    }
+
     private static func domainMatches(_ domain: String, _ protectedDomain: String) -> Bool {
         domain == protectedDomain || domain.hasSuffix(".\(protectedDomain)")
     }

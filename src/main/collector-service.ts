@@ -278,7 +278,6 @@ export class CollectorService extends EventEmitter {
     if (generation !== this.generation) return;
     if (isForegroundEvidencePacket(line)) {
       const evidence = parseForegroundEvidencePacket(line, {
-        captureEmailActivity: this.settings.captureEmailActivity,
         captureMessagingActivity: this.settings.captureMessagingActivity
       });
       if (evidence && evidence.generation === this.foregroundGeneration) this.emit("foreground", evidence);

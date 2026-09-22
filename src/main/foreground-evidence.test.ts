@@ -6,7 +6,7 @@ import {
   parseForegroundEvidencePacket
 } from "./foreground-evidence";
 
-const privacy = { captureEmailActivity: false, captureMessagingActivity: false };
+const privacy = { captureMessagingActivity: false };
 
 function packet(value: Record<string, unknown>): string {
   return `${FOREGROUND_EVIDENCE_PREFIX}${JSON.stringify(value)}`;
@@ -25,6 +25,14 @@ const browser = {
 test("accepts a tagged browser packet and normalizes its host", () => {
   const evidence = parseForegroundEvidencePacket(packet(browser), privacy);
   assert.deepEqual(evidence, { ...browser, domain: "video.example" });
+});
+
+test("allows webmail hosts as Focus evidence when email activity is off", () => {
+  for (const domain of ["mail.google.com", "outlook.office.com", "inbox.mail.google.com"]) {
+    const evidence = parseForegroundEvidencePacket(packet({ ...browser, domain }), privacy);
+    assert.equal(evidence?.kind, "browser", domain);
+    assert.equal(evidence?.kind === "browser" ? evidence.domain : undefined, domain);
+  }
 });
 
 test("keeps persisted activity lines and evidence packets distinct", () => {
@@ -65,8 +73,8 @@ test("drops malformed, oversized, unexpected or out-of-contract packets", () => 
   for (const line of invalid) assert.equal(parseForegroundEvidencePacket(line, privacy), undefined, line.slice(0, 80));
 });
 
-test("re-applies the privacy policy and downgrades protected sites to unknown", () => {
-  for (const domain of ["pornhub.com", "media.pornhub.com", "mail.google.com", "app.slack.com", "user@example.com"]) {
+test("re-applies the Focus policy and downgrades protected sites to unknown", () => {
+  for (const domain of ["pornhub.com", "media.pornhub.com", "app.slack.com", "user@example.com"]) {
     const evidence = parseForegroundEvidencePacket(packet({ ...browser, domain }), privacy);
     assert.equal(evidence?.kind, "unknown", domain);
     assert.equal(evidence?.kind === "unknown" ? evidence.reason : undefined, "protected_context", domain);
@@ -74,8 +82,8 @@ test("re-applies the privacy policy and downgrades protected sites to unknown", 
   }
 });
 
-test("respects explicit email and messaging opt-ins without unblocking adult sites", () => {
-  const optedIn = { captureEmailActivity: true, captureMessagingActivity: true };
+test("respects the messaging opt-in without unblocking adult sites", () => {
+  const optedIn = { captureMessagingActivity: true };
   assert.equal(parseForegroundEvidencePacket(packet({ ...browser, domain: "mail.google.com" }), optedIn)?.kind, "browser");
   assert.equal(parseForegroundEvidencePacket(packet({ ...browser, domain: "app.slack.com" }), optedIn)?.kind, "browser");
   assert.equal(parseForegroundEvidencePacket(packet({ ...browser, domain: "pornhub.com" }), optedIn)?.kind, "unknown");

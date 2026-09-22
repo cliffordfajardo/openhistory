@@ -756,7 +756,7 @@ function DetectionCard({
       <dl className="focus-support">
         <div><dt>Initial browser targets</dt><dd>Safari, Google Chrome</dd></div>
         <div><dt>Experimental</dt><dd>Chrome Beta/Canary, Edge, Brave, Arc, Firefox, Chromium, Vivaldi, Opera</dd></div>
-        <div><dt>Excluded when detected</dt><dd>Private and incognito windows, password managers, protected pages, and excluded apps. Private-window detection depends on browser accessibility information.</dd></div>
+        <div><dt>Excluded when detected</dt><dd>Private and incognito windows, password managers, protected pages, and excluded apps. Private-window detection depends on browser accessibility information. Listed webmail sites can still trigger reminders by site name when email activity is excluded from history.</dd></div>
       </dl>
       {focus.lastReminderAt ? (
         <p className="focus-quiet">Last reminder at {formatClock(focus.lastReminderAt)}.

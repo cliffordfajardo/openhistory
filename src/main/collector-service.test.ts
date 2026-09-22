@@ -183,6 +183,31 @@ test("drops evidence from a collector generation that has been restarted", async
   assert.equal(evidence.length, 0, "no evidence is accepted while paused");
 });
 
+test("forwards Gmail host to Focus while withholding Gmail activity", async (context) => {
+  const directory = await testDirectory(context);
+  const native = new FakeNativeCollector();
+  const collector = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native);
+  context.after(() => collector.stop());
+  const events: string[] = [];
+  const evidence: unknown[] = [];
+  collector.on("event", (event) => events.push(event.kind));
+  collector.on("foreground", (value) => evidence.push(value));
+  collector.start();
+  collector.setForegroundObservation(1);
+  native.onEvent?.(evidencePacket(1, "mail.google.com"));
+  native.onEvent?.(JSON.stringify({
+    version: 1, id: "gmail-activity", timestamp: "2026-08-16T12:00:01Z",
+    kind: "url_changed",
+    application: { bundleIdentifier: "com.apple.Safari", localizedName: "Safari", processIdentifier: 501 },
+    browser: { url: "https://mail.google.com/mail/u/0/#inbox", domain: "mail.google.com" }
+  }));
+  assert.equal(evidence.length, 1);
+  assert.equal((evidence[0] as { domain?: string }).domain, "mail.google.com");
+  assert.deepEqual(events, ["collector_started"]);
+  assert.equal(collector.recentEvents.some((event) => event.id === "gmail-activity"), false);
+  assert.doesNotMatch(JSON.stringify(collector.recentEvents), /mail\.google\.com|inbox/);
+});
+
 test("exposes the native reminder only when the bridge provides it", async (context) => {
   const directory = await testDirectory(context);
   const withoutOverlay = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, new FakeNativeCollector());

@@ -1,6 +1,6 @@
 import { normalizeObservedHost } from "@shared/focus";
 import { z } from "zod";
-import { isBrowserEvent, isProtectedActivityEvent, isProtectedAdultWebDomain } from "./privacy-policy";
+import { isProtectedFocusHost } from "./privacy-policy";
 
 /** Must match ForegroundEvidence.packetPrefix in native ActivityCore. */
 export const FOREGROUND_EVIDENCE_PREFIX = "openhistory-foreground-evidence:";
@@ -68,13 +68,13 @@ export function isForegroundEvidencePacket(line: string): boolean {
 }
 
 /**
- * Validates a native evidence packet and re-applies the TypeScript privacy policy. Anything that
+ * Validates a native evidence packet and re-applies the Focus-only privacy policy. Anything that
  * fails validation returns undefined (dropped); a browser observation the policy protects is
  * downgraded to an unknown observation without its domain.
  */
 export function parseForegroundEvidencePacket(
   line: string,
-  privacy: { captureEmailActivity: boolean; captureMessagingActivity: boolean }
+  privacy: { captureMessagingActivity: boolean }
 ): ForegroundEvidence | undefined {
   if (!isForegroundEvidencePacket(line) || line.length > MAX_PACKET_CHARACTERS) return undefined;
   let value: unknown;
@@ -89,17 +89,8 @@ export function parseForegroundEvidencePacket(
   if (evidence.kind === "unknown") return evidence;
 
   const domain = normalizeObservedHost(evidence.domain);
-  const application = {
-    bundleIdentifier: evidence.bundleIdentifier,
-    localizedName: null,
-    processIdentifier: evidence.processIdentifier
-  };
-  const protectedEvidence = !isBrowserEvent({ application }) || !domain ||
-    isProtectedAdultWebDomain(domain) || isProtectedActivityEvent({
-    kind: "url_changed",
-    application,
-    browser: { url: `https://${domain ?? "invalid.invalid"}/`, domain: domain ?? "" }
-  }, privacy);
+  const protectedEvidence = !domain ||
+    isProtectedFocusHost(domain, evidence.bundleIdentifier, privacy);
   if (protectedEvidence) {
     return {
       kind: "unknown",
