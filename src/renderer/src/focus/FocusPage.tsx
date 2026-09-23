@@ -2,6 +2,7 @@ import type { BootstrapState, CollectionSettings } from "@shared/contracts";
 import {
   FOCUS_DURATION_PRESETS,
   FOCUS_LIMITS,
+  FOCUS_PROGRESS_COLOR_PRESETS,
   FOCUS_TIMING,
   focusSessionProgress,
   focusSessionRemainingMs,
@@ -13,7 +14,7 @@ import {
   type FocusForegroundSummary,
   type FocusViewState
 } from "@shared/focus";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   InlineError,
   focusAction,
@@ -21,6 +22,7 @@ import {
   formatRemaining,
   readableError,
   useNow,
+  withFocus,
   type SetAppState
 } from "./shared";
 
@@ -528,6 +530,84 @@ function EditSessionForm({
   );
 }
 
+function ProgressColorRow({
+  focus,
+  setError,
+  setState
+}: {
+  focus: FocusViewState;
+  setError: (message: string | undefined) => void;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const [pending, setPending] = useState<string>();
+  const queued = useRef<string | undefined>(undefined);
+  const saving = useRef(false);
+  const color = pending ?? focus.preferences.progressColor;
+
+  async function choose(value: string): Promise<void> {
+    queued.current = value;
+    setPending(value);
+    if (saving.current) return;
+    saving.current = true;
+    try {
+      while (queued.current !== undefined) {
+        const nextColor = queued.current;
+        queued.current = undefined;
+        try {
+          const next = await window.openHistory.setFocusProgressColor(nextColor);
+          if (queued.current === undefined) {
+            setPending(undefined);
+            setError(undefined);
+            withFocus(setState, next);
+          }
+        } catch (caught) {
+          if (queued.current === undefined) {
+            setPending(undefined);
+            setError(readableError(caught));
+          }
+        }
+      }
+    } finally {
+      saving.current = false;
+    }
+  }
+
+  return (
+    <div className="focus-color">
+      <span className="focus-color-title" id="focus-color-label">Color</span>
+      <div aria-labelledby="focus-color-label" className="focus-color-choices" role="group">
+        {FOCUS_PROGRESS_COLOR_PRESETS.map((preset) => (
+          <button
+            aria-label={preset.name}
+            aria-pressed={color === preset.value}
+            className={color === preset.value ? "focus-color-swatch is-chosen" : "focus-color-swatch"}
+            key={preset.value}
+            onClick={() => void choose(preset.value)}
+            style={{ "--swatch": preset.value } as React.CSSProperties}
+            title={preset.name}
+            type="button"
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 8.4 6.8 11 12 5.4" /></svg>
+          </button>
+        ))}
+        <label className="focus-color-custom" title="Custom color">
+          <span className="focus-color-well" style={{ "--swatch": color } as React.CSSProperties} />
+          <span>Custom</span>
+          <input
+            aria-label="Custom progress color"
+            onChange={(event) => void choose(event.target.value)}
+            type="color"
+            value={color}
+          />
+        </label>
+      </div>
+      <small className="focus-quiet">
+        Applies immediately to both progress bars.
+      </small>
+    </div>
+  );
+}
+
 function SessionDisplayCard({
   focus,
   setState
@@ -584,7 +664,7 @@ function SessionDisplayCard({
         <span>
           <strong>Show timer bar</strong>
           <small>
-            A quiet green bar across the top of the screen that shrinks as the time left runs out.
+            A quiet bar across the top of the screen that shrinks as the time left runs out.
             Every display shows the same one, and clicks pass straight through it.
           </small>
         </span>
@@ -592,6 +672,7 @@ function SessionDisplayCard({
       {!focus.timerBarAvailable ? (
         <p className="focus-quiet">This build has no native timer bar.</p>
       ) : null}
+      <ProgressColorRow focus={focus} setError={setError} setState={setState} />
       {active && presentation === "floating" && focus.barAvailable ? (
         <div className="focus-actions">
           <button className="secondary-button" onClick={() => void run(() => window.openHistory.focusFocusBar())} type="button">

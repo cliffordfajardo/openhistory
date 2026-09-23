@@ -16,6 +16,11 @@ export interface TimerBarRequest {
     pausedRemainingSeconds: number | null;
     totalSeconds: number;
   } | null;
+  /**
+   * The shared progress color as `#rrggbb`. It sits beside the clock rather than inside it, and is
+   * sent even with no session, so recoloring the strip can never look like a new session.
+   */
+  progressColor: string;
 }
 
 export type TimerBarResult = "applied" | "invalid_request" | "not_main_thread" | "no_display";
@@ -27,18 +32,20 @@ export type TimerBarResult = "applied" | "invalid_request" | "not_main_thread" |
 export function timerBarRequest(
   session: FocusSession,
   now: number,
-  enabled: boolean
+  enabled: boolean,
+  progressColor: string
 ): TimerBarRequest {
-  if (!enabled || session.status !== "active") return { enabled, session: null };
+  if (!enabled || session.status !== "active") return { enabled, session: null, progressColor };
   const remainingMs = focusSessionRemainingMs(session, now);
-  if (remainingMs <= 0) return { enabled, session: null };
+  if (remainingMs <= 0) return { enabled, session: null, progressColor };
   return {
     enabled,
     session: {
       endsAtEpochSeconds: session.endsAt === null ? null : Date.parse(session.endsAt) / 1_000,
       pausedRemainingSeconds: session.endsAt === null ? remainingMs / 1_000 : null,
       totalSeconds: Math.max(1, session.totalMs / 1_000)
-    }
+    },
+    progressColor
   };
 }
 

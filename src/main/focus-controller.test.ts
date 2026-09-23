@@ -1,4 +1,5 @@
 import {
+  FOCUS_PROGRESS_COLOR_DEFAULT,
   FOCUS_TIMING,
   focusSessionRemainingMs,
   type FocusViewState,
@@ -155,6 +156,7 @@ interface Fixture {
 }
 
 const START_OF_TEST_TIME = 1_800_000_000_000;
+const GREEN = FOCUS_PROGRESS_COLOR_DEFAULT;
 
 async function fixture(
   context: TestContext,
@@ -1159,7 +1161,7 @@ test("the timer bar follows the preference, the session's own clock and every ti
 
   const goalId = readyToStart(f);
   f.controller.start({ goalId, intention: "", durationMinutes: 25 });
-  assert.deepEqual(f.timerBar.requests, [{ enabled: false, session: null }],
+  assert.deepEqual(f.timerBar.requests, [{ enabled: false, session: null, progressColor: GREEN }],
     "a switched-off bar is told once and never again");
 
   const startedAt = f.clock.now;
@@ -1169,7 +1171,7 @@ test("the timer bar follows the preference, the session's own clock and every ti
     pausedRemainingSeconds: null,
     totalSeconds: 1_500
   };
-  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: true, session: running });
+  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: true, session: running, progressColor: GREEN });
 
   const before = f.timerBar.requests.length;
   for (let second = 0; second < 2; second += 1) {
@@ -1188,13 +1190,56 @@ test("the timer bar follows the preference, the session's own clock and every ti
   }, "a pause freezes the bar on the remainder rather than a deadline");
 
   f.controller.stop();
-  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: true, session: null },
+  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: true, session: null, progressColor: GREEN },
     "an idle bar stays enabled, so its panels are kept for the next session");
   const idle = f.timerBar.requests.length;
   f.controller.setShowTimerBar(false);
-  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: false, session: null });
+  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: false, session: null, progressColor: GREEN });
   f.controller.saveGoal({ title: "Another", why: "", currentFocus: "" });
   assert.equal(f.timerBar.requests.length, idle + 1, "nothing is re-sent while the preference is off");
+});
+
+test("one chosen color reaches both bars, outlives a restart, and moves no clock", async (context) => {
+  const f = await fixture(context);
+  assert.equal(f.controller.view().preferences.progressColor, GREEN,
+    "a fresh install draws the green both bars already used");
+
+  const goalId = readyToStart(f);
+  f.controller.setShowTimerBar(true);
+  f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 });
+  const runningSession = f.store.load().session;
+  const runningClock = f.timerBar.requests.at(-1)!.session;
+  f.controller.setProgressColor("#5c84b8");
+  assert.deepEqual(f.store.load().session, runningSession);
+  assert.deepEqual(f.timerBar.requests.at(-1)!.session, runningClock);
+  assert.equal(f.bar.snapshots.at(-1)?.progressColor, "#5c84b8");
+  f.clock.now += 5 * 60_000;
+  f.timers.tick();
+  f.controller.pauseSession();
+  const beforeSession = f.store.load().session!;
+  const beforeClock = f.timerBar.requests.at(-1)!.session;
+
+  const view = f.controller.setProgressColor("#B86B5C");
+  assert.equal(view.preferences.progressColor, "#b86b5c", "the saved color is canonical lowercase");
+  assert.equal(f.bar.snapshots.at(-1)?.progressColor, "#b86b5c");
+  assert.equal(f.timerBar.requests.at(-1)?.progressColor, "#b86b5c",
+    "both native surfaces are told the same color");
+  assert.deepEqual(f.timerBar.requests.at(-1)?.session, beforeClock,
+    "and the running clock is exactly the one it already had");
+  assert.deepEqual(f.store.load().session, beforeSession,
+    "a paused session keeps its remainder, its deadline and its identity");
+
+  for (const rejected of ["#b86b5", "#b86b5cc", "b86b5c", "#b86b5g", "rebeccapurple", "", 3, null]) {
+    assert.throws(() => f.controller.setProgressColor(rejected), /#rrggbb/,
+      JSON.stringify(rejected) ?? "undefined");
+  }
+  assert.equal(f.controller.view().preferences.progressColor, "#b86b5c",
+    "a refused color leaves the saved one alone");
+
+  const restarted = await fixture(context, f.directory, undefined, undefined, f.clock.now + 1_000);
+  assert.equal(restarted.controller.view().preferences.progressColor, "#b86b5c");
+  assert.equal(restarted.bar.snapshots.at(-1)?.progressColor, "#b86b5c",
+    "and the bar is that color again from the first frame after a restart");
 });
 
 test("the timer bar is independent of where the session itself is shown", async (context) => {

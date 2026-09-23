@@ -218,3 +218,23 @@ The app is left with Show timer bar enabled, the original floating-bar preferenc
 session ending at approximately the prior 6:38 PM target. The old build had no persisted clock, so
 that one development upgrade required restarting the session; subsequent restart checks used the
 new persisted clock without adjustment. The amber/card issue recorded earlier remains unresolved.
+
+## Shared progress color
+
+The Color row in Focus → While a session runs offers six presets and a native custom picker.
+One lowercase hex preference controls both fills, including while paused. The floating fill keeps
+0.24 opacity; the menu-region gradient uses 0.20 and 0.14. The amber reminder is unchanged.
+Picker updates use one request in flight and retain the latest pending selection.
+
+The native presentation fixture verified actual RGB values on both surfaces, live recoloring
+without changing clock fields or animation signatures, continued movement between ticks, frozen
+paused widths, invalid-input rejection, and unchanged foreground/key windows. Tests used one
+connected display. The full automated pass includes 387 TypeScript tests, 61 Swift tests,
+typechecking, native bridge smoke, the timer-bar presentation fixture, distribution and public
+repository checks. Physical multi-display and platform coverage limitations above still apply.
+
+Installed-app checks passed for the Blue preset, a custom RGB selection (`#7884b8`), and restoration
+of that custom color after quitting and relaunching. The persisted session ID, deadline and total
+were unchanged by installation, color changes and restart. Escape canceled the picker selection;
+Return committed it. The original Green preset was restored after testing. The compact swatches,
+selection ring/check, custom control and copy were inspected in the installed dark-mode window.

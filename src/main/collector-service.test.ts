@@ -270,7 +270,8 @@ test("exposes the floating bar only when the bridge has all of its calls", async
     totalSeconds: 1_500,
     snoozed: false,
     position: null,
-    width: 460
+    width: 460,
+    progressColor: "#5c9e73"
   }), "no_display");
   assert.equal((JSON.parse(snapshots[0]!) as { sessionId: string }).sessionId, "session-1");
   bar.hide();
@@ -303,10 +304,12 @@ test("exposes the timer bar on its own, independently of the floating bar", asyn
   assert(timerBar);
   assert.equal(timerBar.update({
     enabled: true,
+    progressColor: "#5c9e73",
     session: { endsAtEpochSeconds: 1_800_001_500, pausedRemainingSeconds: null, totalSeconds: 1_500 }
   }), "applied");
   assert.deepEqual(JSON.parse(requests[0]!), {
     enabled: true,
+    progressColor: "#5c9e73",
     session: { endsAtEpochSeconds: 1_800_001_500, pausedRemainingSeconds: null, totalSeconds: 1_500 }
   }, "no goal, intention or site ever reaches the timer bar");
   timerBar.shutdown();

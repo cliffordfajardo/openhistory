@@ -116,6 +116,8 @@ const bridge: OpenHistoryBridge = {
     ipcRenderer.invoke(IPC_CHANNELS.setFocusBarPresentation, presentation),
   setFocusShowTimerBar: (showTimerBar) =>
     ipcRenderer.invoke(IPC_CHANNELS.setFocusShowTimerBar, showTimerBar),
+  setFocusProgressColor: (progressColor) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setFocusProgressColor, progressColor),
   focusFocusBar: () => ipcRenderer.invoke(IPC_CHANNELS.focusFocusBar),
   onOpenFocusEditor: (listener) => {
     const handler = (): void => listener();

@@ -82,6 +82,20 @@
 .focus-edge-toggle span { display: grid; gap: 2px; }
 .focus-edge-toggle strong { color: var(--focus-ink); font-size: 12px; }
 .focus-edge-toggle small { color: #777; font-size: 10.5px; line-height: 1.45; }
+.focus-color { display: grid; gap: 6px; }
+.focus-color-title { color: var(--focus-ink); font-size: 12px; font-weight: 650; }
+.focus-color-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.focus-color-swatch { display: grid; width: 24px; height: 24px; padding: 0; place-items: center; background: var(--swatch); border: 1px solid rgba(0, 0, 0, .18); border-radius: 50%; }
+.focus-color-swatch svg { width: 13px; height: 13px; fill: none; stroke: #fff; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.2; visibility: hidden; }
+/* The ring and the check both say "chosen", so the choice never rests on color alone. */
+.focus-color-swatch.is-chosen { box-shadow: 0 0 0 2px #fbf9f4, 0 0 0 4px #3f3f3f; }
+.focus-color-swatch.is-chosen svg { visibility: visible; }
+.focus-color-swatch:focus-visible, .focus-color-custom:focus-within { outline: 2px solid #4f7fb5; outline-offset: 2px; }
+.focus-color-custom { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; color: #6f6f6f; background: rgba(255, 255, 255, .35); border: 1px solid rgba(0, 0, 0, .1); border-radius: 999px; font-size: 11px; }
+.focus-color-custom:hover { background: rgba(255, 255, 255, .6); }
+.focus-color-well { display: grid; width: 22px; height: 22px; place-items: center; background: conic-gradient(#b86b5c, #c9964a, #5c9e73, #5c84b8, #8a75b8, #b86b5c); border-radius: 50%; }
+.focus-color-well::after { width: 12px; height: 12px; background: var(--swatch); border: 1px solid rgba(255, 255, 255, .8); border-radius: 50%; content: ""; }
+.focus-color-custom input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; opacity: 0; border: 0; }
 .focus-style-option { display: grid; gap: 4px; padding: 10px 12px; color: inherit; text-align: left; background: rgba(255, 255, 255, .35); border: 1px solid rgba(0, 0, 0, .1); border-radius: 10px; }
 .focus-style-option strong { color: var(--focus-ink); font-size: 12px; }
 .focus-style-option span { color: #777; font-size: 10.5px; line-height: 1.45; }
@@ -158,7 +172,7 @@
     --focus-field-line: rgba(238, 238, 238, .14);
   }
   .focus-lede, .focus-session-copy p, .goal-detail p, .goals-heading p, .activity-day-summary { color: #b7b7b7; }
-  .focus-field > label, .focus-field > legend, .focus-card-heading strong, .focus-card-heading .status-line, .activity-day-copy strong { color: #e5e5e5; }
+  .focus-field > label, .focus-field > legend, .focus-card-heading strong, .focus-card-heading .status-line, .focus-color-title, .activity-day-copy strong { color: #e5e5e5; }
   .focus-honest-note { color: #9e9e9e; border-top-color: rgba(238, 238, 238, .1); }
   .focus-hero .primary-button { color: #1f1a10; background: #e0b25a; border-color: #e0b25a; }
   .focus-hero .primary-button:hover { background: #ebc373; }
@@ -174,6 +188,10 @@
   .focus-style-permission .status-line { color: #e5e5e5; }
   .focus-edge-toggle strong { color: #e5e5e5; }
   .focus-edge-toggle small { color: #a5a5a5; }
+  .focus-color-swatch { border-color: rgba(255, 255, 255, .22); }
+  .focus-color-swatch.is-chosen { box-shadow: 0 0 0 2px #1c1c1c, 0 0 0 4px #e5e5e5; }
+  .focus-color-custom { color: #a5a5a5; background: rgba(255, 255, 255, .05); border-color: rgba(238, 238, 238, .12); }
+  .focus-color-custom:hover { background: rgba(255, 255, 255, .09); }
   .focus-progress { background: rgba(255, 255, 255, .1); }
   .focus-edit-session { background: rgba(0, 0, 0, .12); border-color: rgba(255, 255, 255, .1); }
   .activity-day-step { color: #ccc; background: rgba(255, 255, 255, .06); border-color: rgba(238, 238, 238, .12); }

@@ -3,6 +3,7 @@ import {
   FOCUS_BAR_WIDTH,
   FOCUS_EXPERIENCES,
   FOCUS_LIMITS,
+  FOCUS_PROGRESS_COLOR_DEFAULT,
   parseFocusDomain,
   type FocusBarPosition,
   type FocusBarPresentation,
@@ -80,6 +81,16 @@ export const FocusBarPositionSchema: z.ZodType<FocusBarPosition> = z.object({
   y: BarCoordinateSchema
 }).strict();
 
+/**
+ * The shared progress color. Exactly six ASCII hex digits behind a `#`: no shorthand, no alpha, no
+ * color names and no other notation, so every surface can read the same value without guessing.
+ * The canonical form is lowercase, which is also what a native color well produces.
+ */
+export const FocusProgressColorSchema = z.string()
+  .max(7)
+  .regex(/^#[0-9a-fA-F]{6}$/)
+  .transform((value) => value.toLowerCase());
+
 export const FocusBarWidthSchema = z.number().finite()
   .min(FOCUS_BAR_WIDTH.minimum)
   .max(FOCUS_BAR_WIDTH.maximum)
@@ -120,7 +131,9 @@ export const FocusPreferencesSchema: z.ZodType<FocusPreferences> = z.preprocess(
   /** Files written before the floating bar existed get it, matching a fresh install. */
   barPresentation: FocusBarPresentationSchema.default("floating"),
   /** Off for files written before the timer bar existed and for fresh installs alike. */
-  showTimerBar: z.boolean().default(false)
+  showTimerBar: z.boolean().default(false),
+  /** Files written before the color could be chosen keep the green both bars already drew. */
+  progressColor: FocusProgressColorSchema.default(FOCUS_PROGRESS_COLOR_DEFAULT)
 }).strict());
 
 /** Renderer input. An omitted `experience` keeps the saved one instead of resetting it. */

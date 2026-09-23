@@ -14,6 +14,8 @@ struct FocusBarSnapshot: Decodable {
     let position: Position?
     /// Saved width; absent from bridges written before the bar could be resized.
     let width: Double?
+    /// The chosen `#rrggbb` fill color; absent from apps written before it could be chosen.
+    let progressColor: String?
 
     struct Position: Decodable {
         let x: Double
@@ -22,18 +24,30 @@ struct FocusBarSnapshot: Decodable {
 
     var paused: Bool { endsAtEpochSeconds == nil }
 
+    var progress: FocusProgressColor { FocusProgressColor.parseOrFallback(progressColor) }
+
+    var clockFingerprint: String {
+        "\(sessionId)|\(endsAtEpochSeconds ?? -1)|\(pausedRemainingSeconds ?? -1)|\(totalSeconds)"
+    }
+
     var barWidth: CGFloat {
         let requested = CGFloat(width ?? Double(FocusBarPlacement.defaultWidth))
         return min(max(requested, FocusBarPlacement.minimumWidth), FocusBarPlacement.maximumWidth)
     }
 
+    /// The same safe-integer millisecond bound the timer bar uses: a session that was extended
+    /// past a day is still a session the app can legally hold, so the bar draws it rather than
+    /// refusing it.
+    private static let maximumSeconds: Double = 9_007_199_254_740
+
     var isValid: Bool {
-        !sessionId.isEmpty && sessionId.count <= 100 &&
+        guard progressColor.map({ FocusProgressColor.parse($0) != nil }) ?? true else { return false }
+        return !sessionId.isEmpty && sessionId.count <= 100 &&
             goalTitle.count <= 300 && intention.count <= 600 &&
-            totalSeconds >= 1 && totalSeconds <= 86_400 &&
+            totalSeconds >= 1 && totalSeconds <= Self.maximumSeconds &&
             (endsAtEpochSeconds == nil) != (pausedRemainingSeconds == nil) &&
             (endsAtEpochSeconds.map { $0 > 0 && $0.isFinite } ?? true) &&
-            (pausedRemainingSeconds.map { $0 >= 0 && $0 <= 86_400 } ?? true) &&
+            (pausedRemainingSeconds.map { $0 >= 0 && $0 <= Self.maximumSeconds } ?? true) &&
             (position.map { $0.x.isFinite && $0.y.isFinite && abs($0.x) <= 200_000 && abs($0.y) <= 200_000 } ?? true) &&
             (width.map {
                 $0.isFinite && $0 >= Double(FocusBarPlacement.minimumWidth) &&
@@ -65,6 +79,7 @@ private enum FocusBarStyle {
     static let progressDrift: CGFloat = 4
     static let running = CGColor(srgbRed: 0.36, green: 0.62, blue: 0.45, alpha: 1)
     static let paused = CGColor(srgbRed: 0.62, green: 0.58, blue: 0.44, alpha: 1)
+    static let fillAlpha = 0.24
 }
 
 func focusBarCountdownText(_ seconds: Double) -> String {
@@ -277,6 +292,7 @@ final class FocusBarContentView: NSView {
     private let fill = CALayer()
     private let leadingGrip = FocusBarDecoration()
     private let trailingGrip = FocusBarDecoration()
+    private var fillColor = FocusProgressColor.fallback
     private var hoveredEdge: FocusBarPlacement.HorizontalEdge?
     private var activeResize: (edge: FocusBarPlacement.HorizontalEdge, startX: CGFloat)?
     private let goalLabel = FocusBarLabel(labelWithString: "")
@@ -328,7 +344,7 @@ final class FocusBarContentView: NSView {
         progress.setAccessibilityElement(false)
         fill.anchorPoint = .zero
         fill.position = .zero
-        fill.backgroundColor = FocusBarStyle.running.copy(alpha: 0.24)
+        fill.backgroundColor = FocusProgressColor.fallback.cgColor(alpha: FocusBarStyle.fillAlpha)
         // Only the explicit fill animation moves this layer; implicit ones would fight it.
         fill.actions = [
             "bounds": NSNull(),
@@ -509,9 +525,22 @@ final class FocusBarContentView: NSView {
         primaryButton.setAccessibilityLabel(snapshot.paused ? "Resume focus session" : "Pause focus session")
         primaryButton.toolTip = snapshot.paused ? "Resume focus session" : "Pause focus session"
         dot.layer?.backgroundColor = snapshot.paused ? FocusBarStyle.paused : FocusBarStyle.running
-        fill.backgroundColor = (snapshot.paused ? FocusBarStyle.paused : FocusBarStyle.running)
-            .copy(alpha: 0.24)
+        setFillColor(snapshot.progress)
         needsLayout = true
+    }
+
+    /**
+     Recolors the fill in place. The width animation, if one is running, keeps running: only the
+     layer's color changes, inside a transaction with implicit actions off so nothing fades or
+     restarts. A paused session keeps the chosen color too; the indicator dot says it is paused.
+     */
+    private func setFillColor(_ color: FocusProgressColor) {
+        guard fillColor != color else { return }
+        fillColor = color
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.backgroundColor = color.cgColor(alpha: FocusBarStyle.fillAlpha)
+        CATransaction.commit()
     }
 
     /**
@@ -635,6 +664,9 @@ final class FocusBarController: NSObject {
         guard let frame = placement(for: snapshot) else { return .noDisplay }
         installObserversIfNeeded()
         let (panel, content) = ensurePanel()
+        let clockChanged = self.snapshot?.clockFingerprint != snapshot.clockFingerprint
+        let motionBefore = content.motionReduced
+        var restart = !panel.isVisible
         self.snapshot = snapshot
         content.apply(FocusOverlayAppearance.current)
         content.configure(snapshot)
@@ -642,9 +674,10 @@ final class FocusBarController: NSObject {
             panel.setFrame(frame, display: false)
             content.frame = NSRect(origin: .zero, size: frame.size)
             barFrame = frame
+            restart = true
         }
         paint()
-        applyProgress()
+        if restart || clockChanged || content.motionReduced != motionBefore { applyProgress() }
         panel.orderFrontRegardless()
         syncPaintTimer()
         return .shown

@@ -69,6 +69,7 @@ export const IPC_CHANNELS = {
   editFocusSession: "openhistory:focus-edit-session",
   setFocusBarPresentation: "openhistory:focus-set-bar-presentation",
   setFocusShowTimerBar: "openhistory:focus-set-show-timer-bar",
+  setFocusProgressColor: "openhistory:focus-set-progress-color",
   focusFocusBar: "openhistory:focus-focus-bar",
   openFocusEditor: "openhistory:focus-open-editor",
   previewFocusReminder: "openhistory:focus-preview-reminder",
@@ -378,6 +379,8 @@ export interface OpenHistoryBridge {
   setFocusBarPresentation(presentation: FocusBarPresentation): Promise<FocusViewState>;
   /** Shows or hides the strip across the menu region of every display. */
   setFocusShowTimerBar(showTimerBar: boolean): Promise<FocusViewState>;
+  /** Sets the one `#rrggbb` color both progress fills are drawn in. */
+  setFocusProgressColor(progressColor: string): Promise<FocusViewState>;
   /** Shows the floating bar and moves keyboard focus into it. */
   focusFocusBar(): Promise<FocusViewState>;
   onOpenFocusEditor(listener: () => void): () => void;

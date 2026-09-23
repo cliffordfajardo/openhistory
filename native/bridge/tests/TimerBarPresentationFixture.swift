@@ -8,6 +8,7 @@ private final class Fixture: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         checkPanelFlagsAndPlacement()
         checkLinearShrinkAcrossEveryPanel()
+        checkRecoloringKeepsTheSameCountdown()
         checkPauseFreezesTheFill()
         checkReduceMotionStepsFromTheHeartbeatAlone()
         checkTurningItOffRemovesEverything()
@@ -44,6 +45,10 @@ private final class Fixture: NSObject, NSApplicationDelegate {
         expect(send(enabled: true, endsAt: deadline, pausedRemaining: 10) == 1,
                "two clocks in one request are refused")
         expect(send(enabled: true, endsAt: deadline, total: 0) == 1, "a zero-length session is refused")
+        expect(send(enabled: true, endsAt: deadline, progressColor: "#12345") == 1,
+               "a malformed color is refused rather than guessed at")
+        expect(send(enabled: true, endsAt: deadline, progressColor: nil) == 0,
+               "an app that sends no color at all still gets the original green")
         expect(send(enabled: true, endsAt: nil) == 0, "an enabled request with no session is applied")
         expect(!panels().isEmpty, "which keeps the panels ready for the next session")
         expect(panels().allSatisfy { !$0.isVisible }, "with nothing drawn on screen")
@@ -71,6 +76,19 @@ private final class Fixture: NSObject, NSApplicationDelegate {
         if let smallest = steps.min(), let largest = steps.max() {
             expect(largest - smallest < 0.03, "the fill shrinks at a steady, linear rate")
         }
+    }
+
+    private func checkRecoloringKeepsTheSameCountdown() {
+        let deadline = Date().timeIntervalSince1970 + total
+        _ = send(enabled: true, endsAt: deadline)
+        wait(1)
+        let before = drawnFractions().first ?? -1
+        _ = send(enabled: true, endsAt: deadline, progressColor: "#b86b5c")
+        wait(0.1)
+        let after = drawnFractions().first ?? -1
+        expect(before - after < 0.02 && after < before,
+               String(format: "a new color leaves the fill at %.3f, near the %.3f it had reached",
+                      after, before))
     }
 
     private func checkPauseFreezesTheFill() {
@@ -115,7 +133,8 @@ private final class Fixture: NSObject, NSApplicationDelegate {
         enabled: Bool,
         endsAt: Double?,
         pausedRemaining: Double? = nil,
-        total: Double? = nil
+        total: Double? = nil,
+        progressColor: String? = "#5c9e73"
     ) -> Int32 {
         var session = "null"
         if endsAt != nil || pausedRemaining != nil {
@@ -125,7 +144,8 @@ private final class Fixture: NSObject, NSApplicationDelegate {
             "totalSeconds":\(total ?? self.total)}
             """
         }
-        let request = "{\"enabled\":\(enabled),\"session\":\(session)}"
+        let color = progressColor.map { "\"\($0)\"" } ?? "null"
+        let request = "{\"enabled\":\(enabled),\"session\":\(session),\"progressColor\":\(color)}"
         return request.withCString { openHistoryTimerBarUpdate($0) }
     }
 

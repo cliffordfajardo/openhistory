@@ -134,8 +134,9 @@ be shortened to as little as 1 minute; starting one still asks for at least 5.
 
 ### The floating bar
 
-- 54 points tall and 460 wide to start with, dark, rounded, with a small muted green session
-  indicator and a muted progress fill that grows smoothly from left to right as the session runs.
+- 54 points tall and 460 wide to start with, dark, rounded, with a small session indicator —
+  green while it runs, warm while it is paused — and a muted progress fill, in the color you
+  chose, that grows smoothly from left to right as the session runs.
   The goal truncates visually; VoiceOver reads the whole goal and intention.
 - **Resizing it**: drag either vertical edge sideways — the pointer turns into a resize cursor and
   a thin grip appears on the edge under it. The bar keeps its height, has a 360-point minimum unless the display is narrower,
@@ -174,9 +175,10 @@ Off until you turn it on, under **While a session runs** → **Show timer bar**.
 where the session itself is shown: it can be on with the floating bar, with the menu bar alone, or
 with both.
 
-- A quiet green-to-teal strip at about 20% opacity across the **menu region** of **every** display,
-  full display width. It starts full and shrinks from the right as the time left runs out, so the
-  width you can see is the share of the session that is left.
+- A quiet strip in the color you chose across the **menu region** of **every** display, full
+  display width, fading along its length from about 20% to 14% opacity. It starts full and shrinks
+  from the right as the time left runs out, so the width you can see is the share of the session
+  that is left.
 - The height is whatever that display reserves above its usable area
   (`frame.maxY - visibleFrame.maxY`), enlarged by its notch safe-area inset when necessary.
   A display with no reserved menu region — or a hidden menu bar —
@@ -196,6 +198,23 @@ with both.
   hidden one animates nothing at all.
 - Turning the preference off removes every panel and observer. While it is on but no session is
   running, the panels are kept and simply ordered out, so the next session does not rebuild them.
+
+### The progress color
+
+**While a session runs** → **Color** sets one color for both progress fills: the floating bar's
+and the timer bar's. The six swatches are shortcuts, not a separate kind of setting — the
+preference is a single opaque `#rrggbb` value (`progressColor` in `focus.json`, the original green
+`#5c9e73` for files written before it existed), and a swatch simply reads as chosen when the saved
+color equals it. **Custom** opens the macOS color picker. A new color reaches both bars at once,
+during a running or paused session, without moving the countdown: nothing about the clock, the
+deadline or the frozen remainder changes, and a running fill keeps animating while its color
+changes. Only `#rrggbb` is accepted, by the app and by the native side alike; anything else is
+refused and whatever was saved stays saved. The fills keep their own opacity, and the labels,
+contrast settings and the running/paused indicator dot are unaffected by the choice.
+
+While **System grayscale** is on, macOS desaturates everything on screen, so the chosen color is
+drawn as its gray equivalent until your colors come back. Picking a color changes nothing about
+what is captured or stored.
 
 ### The menu-bar icon
 
@@ -440,7 +459,7 @@ CollectorService (Node): validate + privacy ──► FocusController ◄── 
                                                    │   ▲ (nudge + session IDs)
                                                    ▼   │ pause / resume / complete / edit / moved
                                       FocusBar.swift: floating session bar (session ID)
-FocusController ── enabled + session clock ──► TimerBar.swift: passive strip per display
+FocusController ── enabled + session clock + color ──► TimerBar.swift: strip per display
 ```
 
 Data shapes (`src/shared/focus.ts`):
@@ -448,10 +467,10 @@ Data shapes (`src/shared/focus.ts`):
 - `Goal { id, title, why, currentFocus }`,
   `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" |
   "grayscale_screen" | "grayscale_system", amberEdge, barPresentation: "floating" | "menuBar",
-  showTimerBar }`.
+  showTimerBar, progressColor }`.
   `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, a missing
   `amberEdge` as `true` only for the amber style, a missing `showTimerBar` as `false` (the same as
-  a new install), and a missing `barPresentation` as `"floating"`,
+  a new install), a missing `progressColor` as `"#5c9e73"`, and a missing `barPresentation` as `"floating"`,
   so existing files get the bar exactly as a new install does. `focus.json` also holds
   `barPosition: { x, y } | null`, the bar's saved bottom-left corner in global AppKit points, and
   `barWidth`, its saved width in points (default 460, between 360 and 20 000; a missing one reads
@@ -480,7 +499,7 @@ Data shapes (`src/shared/focus.ts`):
   between ticks so the state is not re-sent, and the app not re-rendered, once a second.
 - The floating bar receives a typed snapshot
   `{ sessionId, goalTitle, intention, endsAtEpochSeconds | null, pausedRemainingSeconds | null,
-  totalSeconds, snoozed, position, width }` through `updateFocusBar`, and reports
+  totalSeconds, snoozed, position, width, progressColor }` through `updateFocusBar`, and reports
   `{ action: "pause" | "resume" | "complete" | "edit" | "move_to_menu_bar" | "moved" | "resized",
   sessionId, x?, y?, width? }`. The deadline is an anchor: the native side runs a 1 Hz
   **paint-only** timer against it (invalidated when the bar hides, pauses or shuts down) while the
@@ -491,7 +510,9 @@ Data shapes (`src/shared/focus.ts`):
   before it is written, so a nonsense or stale resize is ignored rather than saved.
 - The timer bar receives a typed, one-way request
   `{ enabled, session: null | { endsAtEpochSeconds | null, pausedRemainingSeconds | null,
-  totalSeconds } }` through `updateTimerBar`, and is torn down with `shutdownTimerBar`. It carries
+  totalSeconds }, progressColor }` through `updateTimerBar`, and is torn down with
+  `shutdownTimerBar`. The color sits beside the clock rather than inside it, and is sent even with
+  no session, so recoloring the strip can never look like a new session. It carries
   no goal, no intention and nothing about the browser, and it sends nothing back. Exactly one of
   the two clocks is set, and both are bounds-checked on each side. `FocusController.syncTimerBar`
   runs from the existing `publish()` — including the existing 1 Hz tick, and while paused — so the
@@ -657,7 +678,7 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   Escape. With a listed site in front, confirm the reminder still appears and that Window/Screen
   grayscale never contains the bar itself.
 - Manual checks for the timer bar (packaged app): turn **Show timer bar** on during a session and
-  confirm a full-width green strip covers the menu region of **every** display, that it shrinks
+  confirm a full-width strip in the chosen color covers the menu region of **every** display, that it shrinks
   steadily from the right, and that the menu bar underneath stays readable. Click the menus,
   the clock and a menu-bar extra through the strip: every click must reach what is underneath, and
   the app must never come forward. Pause and confirm the strip freezes; resume and confirm it picks

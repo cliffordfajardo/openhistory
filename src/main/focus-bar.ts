@@ -52,6 +52,8 @@ export interface FocusBarSnapshot {
   position: FocusBarPosition | null;
   /** Saved width in points; the native side trims it to the display it lands on. */
   width: number;
+  /** The shared progress color as `#rrggbb`; the bar draws its fill from it at its own opacity. */
+  progressColor: string;
 }
 
 export type FocusBarShowResult = "shown" | "invalid_request" | "not_main_thread" | "no_display";
@@ -59,7 +61,8 @@ export type FocusBarShowResult = "shown" | "invalid_request" | "not_main_thread"
 export function focusBarSnapshot(
   session: ActiveFocusSession,
   now: number,
-  geometry: FocusBarGeometry
+  geometry: FocusBarGeometry,
+  progressColor: string
 ): FocusBarSnapshot {
   const snoozedUntil = session.snoozedUntil === null ? 0 : Date.parse(session.snoozedUntil);
   return {
@@ -73,7 +76,8 @@ export function focusBarSnapshot(
     totalSeconds: Math.max(1, session.totalMs / 1_000),
     snoozed: snoozedUntil > now,
     position: geometry.position,
-    width: geometry.width
+    width: geometry.width,
+    progressColor
   };
 }
 

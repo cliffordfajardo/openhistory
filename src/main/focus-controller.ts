@@ -23,6 +23,7 @@ import {
   FocusBarWidthSchema,
   FocusExperienceSchema,
   FocusPreferencesInputSchema,
+  FocusProgressColorSchema,
   FocusSessionEditSchema,
   FocusStartRequestSchema,
   GoalDraftSchema,
@@ -458,6 +459,20 @@ export class FocusController extends EventEmitter {
     return this.publish();
   }
 
+  /**
+   * Saves the one color both progress fills use and sends it to whichever bars are on screen. The
+   * session is untouched: no clock moves, so changing the color mid-session costs no time.
+   */
+  setProgressColor(value: unknown): FocusViewState {
+    const progressColor = parseOrThrow(
+      FocusProgressColorSchema,
+      value,
+      "Choose a color written as #rrggbb"
+    );
+    this.options.store.updatePreferences({ progressColor });
+    return this.publish();
+  }
+
   /** Makes the floating bar key so its controls can be used from the keyboard. */
   focusBar(): FocusViewState {
     if (!this.options.bar) throw new Error("The floating bar isn't available in this build");
@@ -626,10 +641,12 @@ export class FocusController extends EventEmitter {
       this.hideBar();
       return;
     }
-    const snapshot = focusBarSnapshot(session, this.now(), {
-      position: document.barPosition,
-      width: document.barWidth
-    });
+    const snapshot = focusBarSnapshot(
+      session,
+      this.now(),
+      { position: document.barPosition, width: document.barWidth },
+      document.preferences.progressColor
+    );
     const serialized = JSON.stringify(snapshot);
     if (serialized === this.lastBarSnapshot) return;
     try {
@@ -644,8 +661,14 @@ export class FocusController extends EventEmitter {
   private syncTimerBar(): void {
     const timerBar = this.options.timerBar;
     if (!timerBar) return;
-    const enabled = !this.shutDown && this.options.store.load().preferences.showTimerBar;
-    const request = timerBarRequest(sessionView(this.machine), this.now(), enabled);
+    const preferences = this.options.store.load().preferences;
+    const enabled = !this.shutDown && preferences.showTimerBar;
+    const request = timerBarRequest(
+      sessionView(this.machine),
+      this.now(),
+      enabled,
+      preferences.progressColor
+    );
     const serialized = JSON.stringify(request);
     if (request.session === null && serialized === this.lastTimerBarRequest) return;
     try {

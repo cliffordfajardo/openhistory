@@ -1188,6 +1188,8 @@ async function initialize(): Promise<void> {
     focus!.setBarPresentation(presentation));
   handleTrustedIpc(IPC_CHANNELS.setFocusShowTimerBar, (_event, showTimerBar: unknown) =>
     focus!.setShowTimerBar(showTimerBar));
+  handleTrustedIpc(IPC_CHANNELS.setFocusProgressColor, (_event, progressColor: unknown) =>
+    focus!.setProgressColor(progressColor));
   handleTrustedIpc(IPC_CHANNELS.focusFocusBar, () => focus!.focusBar());
   handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
   handleTrustedIpc(IPC_CHANNELS.setFocusExperience, (_event, experience: unknown) =>

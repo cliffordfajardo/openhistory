@@ -16,6 +16,9 @@ import QuartzCore
 struct TimerBarRequest: Decodable {
     let enabled: Bool
     let session: Session?
+    /// The chosen `#rrggbb` fill color; absent from apps written before it could be chosen. It sits
+    /// outside `session` because it is a preference, not part of the clock.
+    let progressColor: String?
 
     struct Session: Decodable {
         /// Deadline in seconds since the epoch, or null while the session is paused.
@@ -44,7 +47,11 @@ struct TimerBarRequest: Decodable {
         }
     }
 
-    var isValid: Bool { session?.isValid ?? true }
+    var isValid: Bool {
+        (session?.isValid ?? true) && (progressColor.map { FocusProgressColor.parse($0) != nil } ?? true)
+    }
+
+    var color: FocusProgressColor { FocusProgressColor.parseOrFallback(progressColor) }
 }
 
 enum TimerBarResult: Int32 {
@@ -55,9 +62,13 @@ enum TimerBarResult: Int32 {
 }
 
 private enum TimerBarStyle {
-    static let leading = CGColor(srgbRed: 0.24, green: 0.55, blue: 0.40, alpha: 0.20)
-    static let trailing = CGColor(srgbRed: 0.22, green: 0.52, blue: 0.56, alpha: 0.20)
+    static let leadingAlpha = 0.20
+    static let trailingAlpha = 0.14
     static let maximumAnimationDriftPoints: CGFloat = 6
+
+    static func stops(for color: FocusProgressColor) -> [CGColor] {
+        [color.cgColor(alpha: leadingAlpha), color.cgColor(alpha: trailingAlpha)]
+    }
 }
 
 /**
@@ -103,12 +114,13 @@ final class TimerBarContentView: NSView {
     private let gradient = CAGradientLayer()
     private let fillMask = CALayer()
     private var reduceMotion = false
+    private var appliedColor = FocusProgressColor.fallback
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = true
-        gradient.colors = [TimerBarStyle.leading, TimerBarStyle.trailing]
+        gradient.colors = TimerBarStyle.stops(for: .fallback)
         gradient.startPoint = CGPoint(x: 0, y: 0.5)
         gradient.endPoint = CGPoint(x: 1, y: 0.5)
         gradient.anchorPoint = .zero
@@ -116,10 +128,12 @@ final class TimerBarContentView: NSView {
         fillMask.anchorPoint = .zero
         fillMask.position = .zero
         fillMask.backgroundColor = CGColor(gray: 1, alpha: 1)
-        // Only the explicit shrink animation moves the mask; implicit ones would fight it.
+        // Only the explicit shrink animation moves the mask; implicit ones would fight it, and an
+        // implicit cross-fade on `colors` would make a recolor look like a change of state.
         let stillActions = ["bounds": NSNull(), "position": NSNull()] as [String: any CAAction]
         fillMask.actions = stillActions
-        gradient.actions = stillActions
+        gradient.actions = ["bounds": NSNull(), "position": NSNull(), "colors": NSNull()]
+            as [String: any CAAction]
         gradient.mask = fillMask
         layer?.addSublayer(gradient)
     }
@@ -133,6 +147,15 @@ final class TimerBarContentView: NSView {
         layer?.contentsScale = contentsScale
         gradient.contentsScale = contentsScale
         fillMask.contentsScale = contentsScale
+    }
+
+    func apply(color: FocusProgressColor) {
+        guard appliedColor != color else { return }
+        appliedColor = color
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.colors = TimerBarStyle.stops(for: color)
+        CATransaction.commit()
     }
 
     var drawnWidth: CGFloat { (fillMask.presentation() ?? fillMask).bounds.width }
@@ -200,6 +223,7 @@ final class TimerBarController: NSObject {
         let displays = geometry()
         syncPanels(displays)
         guard !panels.isEmpty else { return .noDisplay }
+        applyColor()
         guard request.session != nil else {
             hidePanels()
             return .applied
@@ -301,6 +325,11 @@ final class TimerBarController: NSObject {
         return changed
     }
 
+    private func applyColor() {
+        let color = request?.color ?? .fallback
+        for (_, content) in panels.values { content.apply(color: color) }
+    }
+
     private func applyAppearance(
         _ displays: [(id: CGDirectDisplayID, geometry: TimerBarPlacement.DisplayGeometry)]
     ) -> Bool {
@@ -382,6 +411,7 @@ final class TimerBarController: NSObject {
         guard request?.enabled == true else { return }
         let displays = geometry()
         syncPanels(displays)
+        applyColor()
         guard request?.session != nil else {
             hidePanels()
             return

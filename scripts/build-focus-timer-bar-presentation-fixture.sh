@@ -32,6 +32,7 @@ xcrun swiftc \
   -target "${architecture}-apple-macos14.0" \
   -o "${application_path}/Contents/MacOS/TimerBarPresentationFixture" \
   "${repository}/native/collector/Sources/ActivityCore/TimerBarPlacement.swift" \
+  "${repository}/native/collector/Sources/ActivityCore/FocusProgressColor.swift" \
   "${repository}/native/bridge/TimerBar.swift" \
   "${repository}/native/bridge/tests/TimerBarTestShims.swift" \
   "${repository}/native/bridge/tests/TimerBarPresentationFixture.swift" \

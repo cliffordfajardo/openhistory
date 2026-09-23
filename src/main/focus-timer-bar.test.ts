@@ -1,9 +1,10 @@
-import type { FocusSession } from "@shared/focus";
+import { FOCUS_PROGRESS_COLOR_DEFAULT, type FocusSession } from "@shared/focus";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { timerBarRemainingFraction, timerBarRequest } from "./focus-timer-bar";
 
 const NOW = 1_800_000_000_000;
+const GREEN = FOCUS_PROGRESS_COLOR_DEFAULT;
 
 function running(overrides: Partial<Extract<FocusSession, { status: "active" }>> = {}): FocusSession {
   return {
@@ -22,14 +23,15 @@ function running(overrides: Partial<Extract<FocusSession, { status: "active" }>>
 }
 
 test("a running session becomes a deadline and nothing else", () => {
-  const request = timerBarRequest(running(), NOW, true);
+  const request = timerBarRequest(running(), NOW, true, GREEN);
   assert.deepEqual(request, {
     enabled: true,
     session: {
       endsAtEpochSeconds: (NOW + 1_500_000) / 1_000,
       pausedRemainingSeconds: null,
       totalSeconds: 1_500
-    }
+    },
+    progressColor: GREEN
   });
   assert.deepEqual(
     Object.keys(request.session!).sort(),
@@ -42,7 +44,8 @@ test("a paused session becomes a frozen remainder instead of a deadline", () => 
   const request = timerBarRequest(
     running({ endsAt: null, pausedRemainingMs: 456_700 }),
     NOW + 60_000,
-    true
+    true,
+    GREEN
   );
   assert.deepEqual(request.session, {
     endsAtEpochSeconds: null,
@@ -54,17 +57,31 @@ test("a paused session becomes a frozen remainder instead of a deadline", () => 
 
 test("fractional seconds survive, so a resume does not round the countdown", () => {
   const session = running({ endsAt: new Date(NOW + 1_499_400).toISOString() });
-  assert.equal(timerBarRequest(session, NOW, true).session?.endsAtEpochSeconds, (NOW + 1_499_400) / 1_000);
+  assert.equal(timerBarRequest(session, NOW, true, GREEN).session?.endsAtEpochSeconds, (NOW + 1_499_400) / 1_000);
 });
 
 test("a spent, idle or switched-off bar carries no session at all", () => {
-  assert.deepEqual(timerBarRequest({ status: "idle" }, NOW, true), { enabled: true, session: null });
-  assert.deepEqual(timerBarRequest(running(), NOW, false), { enabled: false, session: null });
+  assert.deepEqual(timerBarRequest({ status: "idle" }, NOW, true, GREEN),
+    { enabled: true, session: null, progressColor: GREEN });
+  assert.deepEqual(timerBarRequest(running(), NOW, false, GREEN),
+    { enabled: false, session: null, progressColor: GREEN });
   const expired = running({ endsAt: new Date(NOW - 1).toISOString() });
-  assert.deepEqual(timerBarRequest(expired, NOW, true), { enabled: true, session: null },
+  assert.deepEqual(timerBarRequest(expired, NOW, true, GREEN),
+    { enabled: true, session: null, progressColor: GREEN },
     "the native side is never asked to draw a session that is already over");
   const spentPause = running({ endsAt: null, pausedRemainingMs: 0 });
-  assert.equal(timerBarRequest(spentPause, NOW, true).session, null);
+  assert.equal(timerBarRequest(spentPause, NOW, true, GREEN).session, null);
+});
+
+test("the color rides beside the clock, so it reaches the bar with or without a session", () => {
+  const runningSession = running();
+  assert.equal(timerBarRequest(runningSession, NOW, true, "#b86b5c").progressColor, "#b86b5c");
+  assert.equal(timerBarRequest({ status: "idle" }, NOW, true, "#b86b5c").progressColor, "#b86b5c");
+  assert.deepEqual(
+    timerBarRequest(runningSession, NOW, true, "#b86b5c").session,
+    timerBarRequest(runningSession, NOW, true, GREEN).session,
+    "and a new color moves no part of the clock"
+  );
 });
 
 test("the remaining fraction is clamped and survives a zero total", () => {

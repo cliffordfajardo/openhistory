@@ -62,6 +62,26 @@ export type FocusExperience = (typeof FOCUS_EXPERIENCES)[number];
 export const FOCUS_BAR_PRESENTATIONS = ["floating", "menuBar"] as const;
 export type FocusBarPresentation = (typeof FOCUS_BAR_PRESENTATIONS)[number];
 
+/**
+ * The one color both progress fills are drawn in, as an opaque lowercase `#rrggbb` value. It is
+ * the muted green the floating bar has always used, so nothing changes until a color is chosen.
+ */
+export const FOCUS_PROGRESS_COLOR_DEFAULT = "#5c9e73";
+
+/**
+ * The named shortcuts the Focus page offers. They are ordinary values, not a second kind of
+ * setting: a swatch reads as chosen when the saved color equals it, and a color picked by hand
+ * that happens to match one shows that swatch as chosen too.
+ */
+export const FOCUS_PROGRESS_COLOR_PRESETS = [
+  { name: "Blue", value: "#5c84b8" },
+  { name: "Green", value: FOCUS_PROGRESS_COLOR_DEFAULT },
+  { name: "Red", value: "#b86b5c" },
+  { name: "Purple", value: "#8a75b8" },
+  { name: "Amber", value: "#c9964a" },
+  { name: "Gray", value: "#8a8f96" }
+] as const;
+
 /** Bottom-left corner of the floating bar in global AppKit points (y up). */
 export interface FocusBarPosition {
   x: number;
@@ -96,6 +116,11 @@ export interface FocusPreferences {
    * it is chosen, and independent of `barPresentation`: either, both or neither can be on.
    */
   showTimerBar: boolean;
+  /**
+   * The fill color of both progress bars, as an opaque lowercase `#rrggbb` value. One preference
+   * covers the floating bar and the timer bar; each surface keeps its own opacity.
+   */
+  progressColor: string;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { FOCUS_PROGRESS_COLOR_DEFAULT } from "@shared/focus";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
@@ -24,7 +25,8 @@ test("starts empty, creates goals privately and selects the first one", async (c
       experience: "amber",
       amberEdge: true,
       barPresentation: "floating",
-      showTimerBar: false
+      showTimerBar: false,
+      progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
     },
     barPosition: null,
     barWidth: 460,
@@ -70,7 +72,8 @@ test("persists normalized distracting sites and duration", async (context) => {
     experience: "amber",
     amberEdge: true,
     barPresentation: "floating",
-    showTimerBar: false
+    showTimerBar: false,
+    progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
   });
   assert.deepEqual(new FocusStore(directory).load().preferences, {
     domains: ["social.example", "video.example"],
@@ -78,7 +81,8 @@ test("persists normalized distracting sites and duration", async (context) => {
     experience: "amber",
     amberEdge: true,
     barPresentation: "floating",
-    showTimerBar: false
+    showTimerBar: false,
+    progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
   });
 });
 
@@ -105,7 +109,8 @@ test("files from before the separate amber edge keep their look", async (context
       experience: experience ?? "amber",
       amberEdge,
       barPresentation: "floating",
-      showTimerBar: false
+      showTimerBar: false,
+      progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
     }, String(experience));
     assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   }
@@ -122,8 +127,46 @@ test("persists the amber edge independently of the grayscale choice", async (con
     experience: "grayscale_screen",
     amberEdge: false,
     barPresentation: "floating",
-    showTimerBar: false
+    showTimerBar: false,
+    progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
   });
+});
+
+test("a file written before the color could be chosen keeps the green, and a choice survives", async (context) => {
+  const directory = await testDirectory(context);
+  writeFileSync(resolve(directory, "focus.json"), JSON.stringify({
+    version: 1,
+    goals: [],
+    selectedGoalId: null,
+    preferences: { domains: ["video.example"], durationMinutes: 25, experience: "amber", amberEdge: true }
+  }));
+  const store = new FocusStore(directory);
+  assert.equal(store.recoveredFromInvalidFile, false);
+  assert.equal(store.load().preferences.progressColor, FOCUS_PROGRESS_COLOR_DEFAULT);
+
+  store.updatePreferences({ progressColor: "#b86b5c" });
+  assert.equal(new FocusStore(directory).load().preferences.progressColor, "#b86b5c");
+  assert.deepEqual(new FocusStore(directory).load().preferences.domains, ["video.example"],
+    "and choosing a color keeps everything else in the file");
+});
+
+test("a saved color the file cannot vouch for is refused with the rest of that file", async (context) => {
+  const directory = await testDirectory(context);
+  writeFileSync(resolve(directory, "focus.json"), JSON.stringify({
+    version: 1,
+    goals: [],
+    selectedGoalId: null,
+    preferences: {
+      domains: [],
+      durationMinutes: 25,
+      experience: "amber",
+      amberEdge: true,
+      progressColor: "chartreuse"
+    }
+  }));
+  const store = new FocusStore(directory);
+  assert.equal(store.recoveredFromInvalidFile, true);
+  assert.equal(store.load().preferences.progressColor, FOCUS_PROGRESS_COLOR_DEFAULT);
 });
 
 test("files from before the floating bar get it, and the choice survives a restart", async (context) => {
@@ -192,7 +235,8 @@ test("reads files saved before reminder styles as amber without losing goals or 
       experience: "amber",
       amberEdge: true,
       barPresentation: "floating",
-      showTimerBar: false
+      showTimerBar: false,
+      progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
     },
     barPosition: null,
     barWidth: 460,

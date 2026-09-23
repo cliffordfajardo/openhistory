@@ -1,6 +1,7 @@
 import {
   FOCUS_BAR_WIDTH,
   FOCUS_LIMITS,
+  FOCUS_PROGRESS_COLOR_DEFAULT,
   type FocusBarPosition,
   type FocusExperience,
   type FocusPreferences,
@@ -39,7 +40,8 @@ export const DEFAULT_FOCUS_PREFERENCES: FocusPreferences = {
   experience: "amber",
   amberEdge: true,
   barPresentation: "floating",
-  showTimerBar: false
+  showTimerBar: false,
+  progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
 };
 
 const MAX_FOCUS_FILE_BYTES = 512 * 1_024;

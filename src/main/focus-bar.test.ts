@@ -1,4 +1,8 @@
-import { FOCUS_BAR_WIDTH, type ActiveFocusSession } from "@shared/focus";
+import {
+  FOCUS_BAR_WIDTH,
+  FOCUS_PROGRESS_COLOR_DEFAULT,
+  type ActiveFocusSession
+} from "@shared/focus";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -28,9 +32,10 @@ function session(overrides: Partial<ActiveFocusSession> = {}): ActiveFocusSessio
 }
 
 const COMPACT = { position: null, width: FOCUS_BAR_WIDTH.default };
+const GREEN = FOCUS_PROGRESS_COLOR_DEFAULT;
 
 test("a running session sends a deadline the bar can count down from on its own", () => {
-  const snapshot = focusBarSnapshot(session(), T0 + 5_000, COMPACT);
+  const snapshot = focusBarSnapshot(session(), T0 + 5_000, COMPACT, GREEN);
   assert.deepEqual(snapshot, {
     sessionId: "session-a",
     goalTitle: "Ship the guide",
@@ -40,10 +45,11 @@ test("a running session sends a deadline the bar can count down from on its own"
     totalSeconds: 1_500,
     snoozed: false,
     position: null,
-    width: 460
+    width: 460,
+    progressColor: GREEN
   });
   assert.deepEqual(
-    focusBarSnapshot(session(), T0 + 60_000, COMPACT),
+    focusBarSnapshot(session(), T0 + 60_000, COMPACT, GREEN),
     snapshot,
     "a snapshot taken a minute later is identical, so nothing is sent while the clock runs"
   );
@@ -53,18 +59,20 @@ test("a paused session sends its frozen countdown instead of a deadline", () => 
   const snapshot = focusBarSnapshot(
     session({ endsAt: null, pausedRemainingMs: 8 * 60_000 + 400 }),
     T0 + 60 * 60_000,
-    { position: { x: 12, y: 30 }, width: 1_200 }
+    { position: { x: 12, y: 30 }, width: 1_200 },
+    "#b86b5c"
   );
   assert.equal(snapshot.endsAtEpochSeconds, null);
   assert.equal(snapshot.pausedRemainingSeconds, 480.4);
   assert.deepEqual(snapshot.position, { x: 12, y: 30 });
   assert.equal(snapshot.width, 1_200, "the saved width travels with the position");
+  assert.equal(snapshot.progressColor, "#b86b5c", "a paused bar keeps the chosen fill color");
 });
 
 test("snooze is reported while it lasts and not after it expires", () => {
   const snoozed = session({ snoozedUntil: new Date(T0 + 5 * 60_000).toISOString() });
-  assert.equal(focusBarSnapshot(snoozed, T0, COMPACT).snoozed, true);
-  assert.equal(focusBarSnapshot(snoozed, T0 + 5 * 60_000, COMPACT).snoozed, false);
+  assert.equal(focusBarSnapshot(snoozed, T0, COMPACT, GREEN).snoozed, true);
+  assert.equal(focusBarSnapshot(snoozed, T0 + 5 * 60_000, COMPACT, GREEN).snoozed, false);
 });
 
 test("the countdown reads as minutes, and as hours only when there are hours left", () => {
@@ -124,7 +132,12 @@ test("bar actions are accepted only in their exact shape", () => {
 
 test("the native deadline preserves milliseconds across resume", () => {
   const deadline = T0 + 60_750;
-  const snapshot = focusBarSnapshot(session({ endsAt: new Date(deadline).toISOString() }), T0 + 750, COMPACT);
+  const snapshot = focusBarSnapshot(
+    session({ endsAt: new Date(deadline).toISOString() }),
+    T0 + 750,
+    COMPACT,
+    GREEN
+  );
   assert.equal(snapshot.endsAtEpochSeconds, deadline / 1_000);
   assert.equal(Math.ceil(snapshot.endsAtEpochSeconds! - (T0 + 750) / 1_000), 60);
 });
