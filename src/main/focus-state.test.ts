@@ -877,3 +877,25 @@ test("editing a paused session keeps it paused with the new remaining time", () 
   assert.equal(view.pausedRemainingMs, 10 * 60_000, "time spent paused is never counted as focus time");
   assert.equal(view.totalMs, 15 * 60_000);
 });
+
+test("restoring a deadline after the clock moved backward keeps that exact deadline", () => {
+  const harness = new Harness();
+  harness.send({
+    type: "restore",
+    now: T0 - 10 * 60_000,
+    sessionId: "session-a",
+    goal: GOAL,
+    intention: "Write the intro",
+    domains: ["video.example"],
+    startedAt: T0,
+    totalMs: 25 * 60_000,
+    remainingMs: 35 * 60_000,
+    paused: false,
+    snoozedUntil: null
+  });
+
+  const view = activeView(harness.state);
+  assert.equal(view.endsAt, new Date(T0 + 25 * 60_000).toISOString());
+  assert.equal(view.totalMs, 35 * 60_000);
+  assert.equal(view.pausedRemainingMs, null);
+});

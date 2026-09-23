@@ -9,8 +9,10 @@ import type {
   FocusBarBinding,
   FocusOverlayBinding,
   FocusOverlayShowResult,
-  FocusScreenCaptureBinding
+  FocusScreenCaptureBinding,
+  TimerBarBinding
 } from "./focus-controller";
+import type { TimerBarResult } from "./focus-timer-bar";
 import { isForegroundEvidencePacket, parseForegroundEvidencePacket } from "./foreground-evidence";
 import { ActivityPrivacyFilter } from "./privacy-policy";
 import type { SystemColorFilterBinding, SystemColorFilterSettings } from "./system-color-filter";
@@ -49,6 +51,8 @@ export interface NativeCollectorBinding {
   hideFocusBar?(): void;
   focusFocusBar?(): void;
   setFocusBarActionHandler?(handler: ((line: string) => void) | null): void;
+  updateTimerBar?(requestJSON: string): number;
+  shutdownTimerBar?(): void;
   screenCaptureAccess?(): boolean;
   requestScreenCaptureAccess?(): boolean;
   systemColorFilterRead?(): SystemColorFilterSettings | null;
@@ -69,6 +73,13 @@ const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
 
 const FOCUS_BAR_RESULTS: Record<number, FocusBarShowResult> = {
   0: "shown",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display"
+};
+
+const TIMER_BAR_RESULTS: Record<number, TimerBarResult> = {
+  0: "applied",
   1: "invalid_request",
   2: "not_main_thread",
   3: "no_display"
@@ -254,6 +265,28 @@ export class CollectorService extends EventEmitter {
       hide: () => hideFocusBar.call(native),
       focus: () => focusFocusBar.call(native),
       setActionHandler: (handler) => setFocusBarActionHandler.call(native, handler)
+    };
+  }
+
+  /**
+   * The native timer bar, or undefined when the native module predates it. It is detected on its
+   * own, so a build can have the floating bar without this one, or the other way round.
+   */
+  timerBar(): TimerBarBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { updateTimerBar, shutdownTimerBar } = native;
+    if (typeof updateTimerBar !== "function" || typeof shutdownTimerBar !== "function") {
+      return undefined;
+    }
+    return {
+      update: (request) => TIMER_BAR_RESULTS[updateTimerBar.call(native, JSON.stringify(request))] ??
+        "invalid_request",
+      shutdown: () => shutdownTimerBar.call(native)
     };
   }
 

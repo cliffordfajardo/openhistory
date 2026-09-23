@@ -5,20 +5,41 @@ import {
   type FocusExperience,
   type FocusPreferences,
   type Goal,
-  type GoalDraft
+  type GoalDraft,
+  type PersistedFocusSession
 } from "@shared/focus";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
-import { FocusDocumentSchema, type FocusDocument } from "./focus-schemas";
+import {
+  FocusDocumentSchema,
+  PersistedFocusSessionSchema,
+  type FocusDocument
+} from "./focus-schemas";
 import { writePrivateFile } from "./private-storage";
+
+function sameSession(left: PersistedFocusSession | null, right: PersistedFocusSession | null): boolean {
+  if (left === null || right === null) return left === right;
+  return left.id === right.id &&
+    left.intention === right.intention &&
+    left.startedAt === right.startedAt &&
+    left.endsAt === right.endsAt &&
+    left.totalMs === right.totalMs &&
+    left.pausedRemainingMs === right.pausedRemainingMs &&
+    left.snoozedUntil === right.snoozedUntil &&
+    left.goal.id === right.goal.id &&
+    left.goal.title === right.goal.title &&
+    left.goal.why === right.goal.why &&
+    left.goal.currentFocus === right.goal.currentFocus;
+}
 
 export const DEFAULT_FOCUS_PREFERENCES: FocusPreferences = {
   domains: [],
   durationMinutes: 25,
   experience: "amber",
   amberEdge: true,
-  barPresentation: "floating"
+  barPresentation: "floating",
+  showTimerBar: false
 };
 
 const MAX_FOCUS_FILE_BYTES = 512 * 1_024;
@@ -30,14 +51,17 @@ function defaultDocument(): FocusDocument {
     selectedGoalId: null,
     preferences: structuredClone(DEFAULT_FOCUS_PREFERENCES),
     barPosition: null,
-    barWidth: FOCUS_BAR_WIDTH.default
+    barWidth: FOCUS_BAR_WIDTH.default,
+    session: null
   };
 }
 
 /**
- * Goals and Focus preferences, stored as one private JSON file inside the owned activity-data
- * root so "Delete all local data" removes them. Sessions are deliberately not stored here: an
- * active session lives only in memory and never resumes after a restart.
+ * Goals, Focus preferences and at most one running session, stored as one private JSON file inside
+ * the owned activity-data root so "Delete all local data" removes them. The session record holds
+ * only its clock and a copy of the goal, and is written only when that clock changes — never once
+ * a second — so a restart brings the session back where it was without recording anything about
+ * what was on screen.
  */
 export class FocusStore {
   readonly path: string;
@@ -130,6 +154,19 @@ export class FocusStore {
       barPosition: changes.position === undefined ? this.document.barPosition : changes.position,
       barWidth: changes.width ?? this.document.barWidth
     });
+  }
+
+  /**
+   * Writes, or forgets, the one saved session. The record is validated here rather than by the
+   * document schema, which quietly drops an unreadable session so the rest of the file survives;
+   * a session this app builds itself should never be wrong, so a bad one is refused loudly.
+   * Passing a record equal to the saved one writes nothing, so the once-a-second countdown never
+   * touches the disk: only a start, pause, resume, edit, snooze or end moves the clock it holds.
+   */
+  saveSession(session: PersistedFocusSession | null): FocusDocument {
+    const next = session === null ? null : PersistedFocusSessionSchema.parse(session);
+    if (sameSession(this.document.session, next)) return this.load();
+    return this.write({ ...this.document, session: next });
   }
 
   private write(next: FocusDocument): FocusDocument {

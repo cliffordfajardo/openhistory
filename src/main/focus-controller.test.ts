@@ -1,6 +1,11 @@
-import { FOCUS_TIMING, type FocusViewState } from "@shared/focus";
+import {
+  FOCUS_TIMING,
+  focusSessionRemainingMs,
+  type FocusViewState,
+  type PersistedFocusSession
+} from "@shared/focus";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -12,8 +17,10 @@ import {
   type FocusOverlayBinding,
   type FocusOverlayRequest,
   type FocusOverlayShowResult,
-  type FocusScreenCaptureBinding
+  type FocusScreenCaptureBinding,
+  type TimerBarBinding
 } from "./focus-controller";
+import type { TimerBarRequest, TimerBarResult } from "./focus-timer-bar";
 import type { FocusCapability } from "./focus-state";
 import { FocusStore } from "./focus-store";
 import {
@@ -69,6 +76,21 @@ class FakeBar implements FocusBarBinding {
   }
 }
 
+class FakeTimerBar implements TimerBarBinding {
+  requests: TimerBarRequest[] = [];
+  shutdowns = 0;
+  result: TimerBarResult = "applied";
+
+  update(request: TimerBarRequest): TimerBarResult {
+    this.requests.push(request);
+    return this.result;
+  }
+
+  shutdown(): void {
+    this.shutdowns += 1;
+  }
+}
+
 class FakeScreenCapture implements FocusScreenCaptureBinding {
   granted = false;
   requests = 0;
@@ -104,10 +126,24 @@ class ManualTimers {
   }
 }
 
+class FailingSessionStore extends FocusStore {
+  failSessionWrites = false;
+  failEvenUnchanged = false;
+
+  override saveSession(session: PersistedFocusSession | null): ReturnType<FocusStore["saveSession"]> {
+    const changed = JSON.stringify(this.load().session) !== JSON.stringify(session);
+    if (this.failSessionWrites && (changed || this.failEvenUnchanged)) {
+      throw new Error("session disk unavailable");
+    }
+    return super.saveSession(session);
+  }
+}
+
 interface Fixture {
   controller: FocusController;
   overlay: FakeOverlay;
   bar: FakeBar;
+  timerBar: FakeTimerBar;
   timers: ManualTimers;
   observations: number[];
   clock: { now: number };
@@ -118,18 +154,23 @@ interface Fixture {
   screenCapture: FakeScreenCapture;
 }
 
+const START_OF_TEST_TIME = 1_800_000_000_000;
+
 async function fixture(
   context: TestContext,
   directory?: string,
   screenCapture = new FakeScreenCapture(),
-  systemFilter?: SystemColorFilterController
+  systemFilter?: SystemColorFilterController,
+  startNow = START_OF_TEST_TIME,
+  suppliedStore?: FocusStore
 ): Promise<Fixture> {
   const dataDirectory = directory ?? await testDirectory(context);
   const overlay = new FakeOverlay();
   const bar = new FakeBar();
+  const timerBar = new FakeTimerBar();
   const timers = new ManualTimers();
   const observations: number[] = [];
-  const clock = { now: 1_800_000_000_000 };
+  const clock = { now: startNow };
   const capability = {
     privacyAccepted: true,
     captureEnabled: true,
@@ -138,11 +179,15 @@ async function fixture(
     captureBrowserURLs: true
   };
   let goalCounter = 0;
-  const store = new FocusStore(dataDirectory, () => `goal-0000000${(goalCounter += 1)}-test`);
+  const store = suppliedStore ?? new FocusStore(
+    dataDirectory,
+    () => `goal-0000000${(goalCounter += 1)}-test`
+  );
   const controller = new FocusController({
     store,
     overlay,
     bar,
+    timerBar,
     screenCapture,
     ...(systemFilter ? { systemFilter } : {}),
     setForegroundObservation: (generation) => observations.push(generation),
@@ -157,7 +202,7 @@ async function fixture(
   controller.on("state", (state: FocusViewState) => states.push(state));
   context.after(() => controller.shutdown());
   return {
-    controller, overlay, bar, timers, observations, clock, capability, states, store,
+    controller, overlay, bar, timerBar, timers, observations, clock, capability, states, store,
     directory: dataDirectory, screenCapture
   };
 }
@@ -234,7 +279,7 @@ test("starts observation, shows one native reminder, and stops cleanly", async (
   assert.equal(f.timers.callbacks.size, 0, "no timer while idle");
 });
 
-test("expires sessions on the timer and never resumes them after a restart", async (context) => {
+test("expires sessions on the timer and brings a running one back after a restart", async (context) => {
   const f = await fixture(context);
   const goalId = readyToStart(f);
   f.controller.start({ goalId, intention: "", durationMinutes: 5 });
@@ -242,12 +287,24 @@ test("expires sessions on the timer and never resumes them after a restart", asy
   f.timers.tick();
   assert.equal(f.controller.view().session.status, "idle");
   assert.equal(f.observations.at(-1), 0);
+  assert.equal(f.store.load().session, null, "a session that completed leaves nothing saved");
 
-  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
-  const restarted = await fixture(context, f.directory);
-  assert.equal(restarted.controller.view().session.status, "idle");
+  f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 });
+  const restarted = await fixture(context, f.directory, undefined, undefined, f.clock.now + 60_000);
+  const session = restarted.controller.view().session;
+  assert.equal(session.status, "active");
+  assert.deepEqual(
+    session.status === "active" ? [session.id, session.intention, session.goal.title] : [],
+    ["session-fixed", "Write the intro", "Ship the guide"]
+  );
+  assert.equal(
+    session.status === "active" ? focusSessionRemainingMs(session, restarted.clock.now) : 0,
+    24 * 60_000,
+    "the minute the app was closed counts against a running session"
+  );
   assert.equal(restarted.controller.view().goals.length, 1, "goals persist across restarts");
-  assert.deepEqual(restarted.observations, []);
+  assert.deepEqual(restarted.observations, [1], "a restored session watches again from nothing seen");
+  assert.equal(restarted.timers.callbacks.size, 1, "the countdown runs again");
 });
 
 test("routes native snooze and dismiss actions and ignores malformed or stale ones", async (context) => {
@@ -1087,8 +1144,183 @@ test("a build without the native bar keeps the session in the menu bar", async (
   const goalId = controller.saveGoal({ title: "Goal", why: "", currentFocus: "" }).goals[0]!.id;
   controller.savePreferences({ domains: ["video.example"], durationMinutes: 25 });
   assert.equal(controller.view().barAvailable, false);
+  assert.equal(controller.view().timerBarAvailable, false);
   assert.throws(() => controller.focusBar(), /isn't available/);
+  assert.throws(() => controller.setShowTimerBar(true), /isn’t available/);
+  assert.equal(controller.setShowTimerBar(false).preferences.showTimerBar, false,
+    "turning an unavailable bar off is still allowed");
   assert.equal(controller.start({ goalId, intention: "", durationMinutes: 25 }).session.status, "active");
+});
+
+test("the timer bar follows the preference, the session's own clock and every tick", async (context) => {
+  const f = await fixture(context);
+  assert.equal(f.controller.view().timerBarAvailable, true);
+  assert.equal(f.controller.view().preferences.showTimerBar, false, "it is off until it is chosen");
+
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  assert.deepEqual(f.timerBar.requests, [{ enabled: false, session: null }],
+    "a switched-off bar is told once and never again");
+
+  const startedAt = f.clock.now;
+  f.controller.setShowTimerBar(true);
+  const running = {
+    endsAtEpochSeconds: (startedAt + 1_500_000) / 1_000,
+    pausedRemainingSeconds: null,
+    totalSeconds: 1_500
+  };
+  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: true, session: running });
+
+  const before = f.timerBar.requests.length;
+  for (let second = 0; second < 2; second += 1) {
+    f.clock.now += 1_000;
+    f.timers.tick();
+  }
+  assert.equal(f.timerBar.requests.length, before + 2,
+    "a running session is re-sent each second so the native side resamples its displays");
+  assert.deepEqual(f.timerBar.requests.at(-1)?.session, running, "always from the same anchored deadline");
+
+  f.controller.pauseSession();
+  assert.deepEqual(f.timerBar.requests.at(-1)?.session, {
+    endsAtEpochSeconds: null,
+    pausedRemainingSeconds: 1_498,
+    totalSeconds: 1_500
+  }, "a pause freezes the bar on the remainder rather than a deadline");
+
+  f.controller.stop();
+  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: true, session: null },
+    "an idle bar stays enabled, so its panels are kept for the next session");
+  const idle = f.timerBar.requests.length;
+  f.controller.setShowTimerBar(false);
+  assert.deepEqual(f.timerBar.requests.at(-1), { enabled: false, session: null });
+  f.controller.saveGoal({ title: "Another", why: "", currentFocus: "" });
+  assert.equal(f.timerBar.requests.length, idle + 1, "nothing is re-sent while the preference is off");
+});
+
+test("the timer bar is independent of where the session itself is shown", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.setShowTimerBar(true);
+  f.controller.setBarPresentation("menuBar");
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  assert.deepEqual(f.bar.snapshots, [], "the floating bar stays away");
+  assert.equal(f.timerBar.requests.at(-1)?.session?.totalSeconds, 1_500, "the timer bar does not");
+
+  f.controller.setBarPresentation("floating");
+  assert.equal(f.bar.snapshots.length, 1);
+  assert.equal(f.timerBar.requests.at(-1)?.enabled, true, "and both can be on together");
+});
+
+test("quitting keeps the saved session; shutting down for deletion clears it", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.setShowTimerBar(true);
+  f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 });
+  assert.equal(f.store.load().session?.id, "session-fixed");
+
+  f.controller.shutdown({ retainSession: true });
+  assert.equal(f.store.load().session?.id, "session-fixed", "a quit keeps it for the next launch");
+  assert.equal(f.controller.view().session.status, "idle", "but it still ends in this launch");
+  assert.equal(f.observations.at(-1), 0, "and nothing is watched any more");
+  assert.equal(f.timerBar.shutdowns, 1, "every native panel goes away");
+  assert.equal(f.bar.hides, 1);
+
+  const afterQuit = await fixture(context, f.directory, undefined, undefined, f.clock.now + 5 * 60_000);
+  assert.equal(afterQuit.controller.view().session.status, "active");
+  afterQuit.controller.shutdown();
+  assert.equal(afterQuit.store.load().session, null, "deleting local data can never bring one back");
+
+  const afterDeletion = await fixture(context, f.directory, undefined, undefined, f.clock.now + 6 * 60_000);
+  assert.equal(afterDeletion.controller.view().session.status, "idle");
+});
+
+test("a paused session comes back paused, and one that ran out while closed is forgotten", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 5 * 60_000;
+  f.controller.pauseSession();
+  assert.deepEqual(
+    [f.store.load().session?.endsAt, f.store.load().session?.pausedRemainingMs],
+    [null, 20 * 60_000]
+  );
+
+  const later = await fixture(context, f.directory, undefined, undefined, f.clock.now + 60 * 60_000);
+  const paused = later.controller.view().session;
+  assert.equal(paused.status === "active" ? paused.endsAt : "x", null, "a pause outlives the app");
+  assert.equal(
+    paused.status === "active" ? focusSessionRemainingMs(paused, later.clock.now) : 0,
+    20 * 60_000,
+    "an hour of being closed takes nothing from a paused session"
+  );
+  assert.deepEqual(later.observations, [0], "and a paused session still watches nothing at all");
+
+  later.controller.resumeSession();
+  const past = later.clock.now + 20 * 60_000 + 1;
+  const expired = await fixture(context, f.directory, undefined, undefined, past);
+  assert.equal(expired.controller.view().session.status, "idle");
+  assert.equal(expired.store.load().session, null, "a session that ran out while closed is dropped quietly");
+  assert.deepEqual(expired.overlay.shown, [], "with no reminder to catch up on");
+  assert.deepEqual(expired.timerBar.requests, [], "and nothing drawn anywhere");
+});
+
+test("a restored session never trusts evidence from before the restart", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  assert.deepEqual(f.observations, [1]);
+
+  const restarted = await fixture(context, f.directory, undefined, undefined, f.clock.now + 1_000);
+  assert.deepEqual(restarted.observations, [1], "a fresh generation is asked for");
+  restarted.controller.handleEvidence({
+    kind: "browser",
+    generation: 0,
+    sequence: 9,
+    observedAt: restarted.clock.now,
+    processIdentifier: 501,
+    bundleIdentifier: "com.apple.Safari",
+    domain: "video.example"
+  });
+  assert.deepEqual(restarted.overlay.shown, [], "evidence from the launch before belongs to no session");
+  assert.equal(restarted.controller.view().foreground, "waiting");
+
+  evidence(restarted);
+  assert.equal(restarted.overlay.shown.length, 1, "fresh evidence after the restart does show a reminder");
+});
+
+test("editing a running session moves the timer bar and the saved session together", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.setShowTimerBar(true);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 5 * 60_000;
+  f.timers.tick();
+
+  f.controller.editSession({ remainingMinutes: 10 });
+  const session = f.controller.view().session;
+  assert.equal(session.status === "active" ? focusSessionRemainingMs(session, f.clock.now) : 0, 10 * 60_000);
+  const saved = f.store.load().session!;
+  assert.equal(saved.totalMs, 15 * 60_000, "the five minutes already spent stay part of the session");
+  assert.equal(saved.endsAt, new Date(f.clock.now + 10 * 60_000).toISOString());
+  assert.deepEqual(f.timerBar.requests.at(-1)?.session, {
+    endsAtEpochSeconds: (f.clock.now + 10 * 60_000) / 1_000,
+    pausedRemainingSeconds: null,
+    totalSeconds: 900
+  }, "so the bar shows a third of the session left, from that same clock");
+});
+
+test("the countdown never rewrites the saved session each second", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.setShowTimerBar(true);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  const written = readFileSync(resolve(f.directory, "focus.json"), "utf8");
+  for (let second = 0; second < 5; second += 1) {
+    f.clock.now += 1_000;
+    f.timers.tick();
+  }
+  assert.equal(readFileSync(resolve(f.directory, "focus.json"), "utf8"), written,
+    "only a start, pause, resume, edit or end moves the clock that is saved");
 });
 
 test("shutdown hides the bar and detaches its handler", async (context) => {
@@ -1113,4 +1345,246 @@ test("a transient native bar failure retries on the next session tick", async (c
   assert.equal(f.bar.snapshots.length, attempts + 1);
   f.timers.tick();
   assert.equal(f.bar.snapshots.length, attempts + 1);
+});
+
+test("session write failures leave explicit start, pause and stop transitions uncommitted", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FailingSessionStore(directory, () => "goal-00000001-test");
+  const f = await fixture(context, directory, undefined, undefined, START_OF_TEST_TIME, store);
+  const goalId = readyToStart(f);
+
+  store.failSessionWrites = true;
+  assert.throws(
+    () => f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 }),
+    /session disk unavailable/
+  );
+  assert.equal(f.controller.view().session.status, "idle");
+  assert.equal(f.store.load().session, null);
+  assert.deepEqual(f.observations, [], "a failed start never begins observation");
+  assert.deepEqual(f.bar.snapshots, [], "a failed start never appears on a native surface");
+
+  store.failSessionWrites = false;
+  f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 });
+  const running = f.controller.view().session;
+  assert.equal(running.status, "active");
+  const saved = structuredClone(f.store.load().session);
+  const observations = [...f.observations];
+
+  f.clock.now += 60_000;
+  store.failSessionWrites = true;
+  assert.throws(() => f.controller.pauseSession(), /session disk unavailable/);
+  assert.deepEqual(f.controller.view().session, running, "a failed pause leaves the deadline running");
+  assert.deepEqual(f.store.load().session, saved);
+  assert.deepEqual(f.observations, observations, "a failed pause never stops observation");
+
+  assert.throws(() => f.controller.stop(), /session disk unavailable/);
+  assert.deepEqual(f.controller.view().session, running, "a failed stop cannot resurrect on restart");
+  assert.deepEqual(f.store.load().session, saved);
+});
+
+test("automatic expiry logs and retries when its checkpoint cannot be cleared", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FailingSessionStore(directory, () => "goal-00000001-test");
+  const f = await fixture(context, directory, undefined, undefined, START_OF_TEST_TIME, store);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 5 });
+  f.clock.now += 5 * 60_000;
+  store.failSessionWrites = true;
+
+  const errors: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...arguments_: unknown[]) => { errors.push(arguments_); };
+  try {
+    assert.doesNotThrow(() => f.timers.tick(), "a timer callback never leaks a storage exception");
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(f.controller.view().session.status, "active", "expiry waits until its clear is durable");
+  assert.equal(f.store.load().session?.id, "session-fixed");
+  assert.equal(f.timers.callbacks.size, 1, "the next tick can retry the clear");
+  assert.equal(errors.some((entry) => String(entry[0]).includes("advance the Focus session")), true);
+
+  store.failSessionWrites = false;
+  f.timers.tick();
+  assert.equal(f.controller.view().session.status, "idle");
+  assert.equal(f.store.load().session, null);
+  assert.equal(f.timers.callbacks.size, 0);
+});
+
+test("foreground expiry contains a failed checkpoint and retries automatically", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FailingSessionStore(directory, () => "goal-00000001-test");
+  const f = await fixture(context, directory, undefined, undefined, START_OF_TEST_TIME, store);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 5 });
+  f.clock.now += 5 * 60_000;
+  store.failSessionWrites = true;
+
+  const errors: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...arguments_: unknown[]) => { errors.push(arguments_); };
+  try {
+    assert.doesNotThrow(() => evidence(f), "collector EventEmitter callbacks never leak storage errors");
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(f.controller.view().session.status, "active");
+  assert.equal(f.store.load().session?.id, "session-fixed");
+  assert.equal(f.timers.callbacks.size, 1);
+  assert.equal(errors.some((entry) => String(entry[0]).includes("foreground evidence")), true);
+
+  store.failSessionWrites = false;
+  f.timers.tick();
+  assert.equal(f.controller.view().session.status, "idle");
+  assert.equal(f.store.load().session, null);
+});
+
+test("native session actions contain checkpoint failures without changing the clock", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FailingSessionStore(directory, () => "goal-00000001-test");
+  const f = await fixture(context, directory, undefined, undefined, START_OF_TEST_TIME, store);
+  const goalId = readyToStart(f);
+  const running = f.controller.start({ goalId, intention: "", durationMinutes: 25 }).session;
+  assert.equal(running.status, "active");
+  store.failSessionWrites = true;
+
+  const errors: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...arguments_: unknown[]) => { errors.push(arguments_); };
+  try {
+    assert.doesNotThrow(() => f.bar.handler?.(JSON.stringify({
+      action: "pause",
+      sessionId: "session-fixed"
+    })));
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(f.controller.view().session, running);
+  assert.deepEqual(f.store.load().session, running.status === "active" ? {
+    id: running.id,
+    goal: running.goal,
+    intention: running.intention,
+    startedAt: running.startedAt,
+    endsAt: running.endsAt,
+    totalMs: running.totalMs,
+    pausedRemainingMs: running.pausedRemainingMs,
+    snoozedUntil: running.snoozedUntil
+  } : null);
+  assert.equal(errors.some((entry) => String(entry[0]).includes("Focus bar action")), true);
+  store.failSessionWrites = false;
+});
+
+test("quit tears down every effect even when its final checkpoint cannot be written", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FailingSessionStore(directory, () => "goal-00000001-test");
+  const filters = new FakeColorFilters({ enabled: true, type: 8 });
+  const filter = new SystemColorFilterController({
+    binding: filters,
+    journalPath: resolve(directory, "color-filter-restore.json")
+  });
+  const f = await fixture(context, directory, new FakeScreenCapture(), filter, START_OF_TEST_TIME, store);
+  f.controller.setExperience("grayscale_system");
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  evidence(f);
+  assert.deepEqual(filters.settings, GRAY);
+
+  store.failSessionWrites = true;
+  store.failEvenUnchanged = true;
+  const originalError = console.error;
+  console.error = () => undefined;
+  try {
+    assert.doesNotThrow(() => f.controller.shutdown({ retainSession: true }));
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(f.controller.view().session.status, "idle");
+  assert.equal(f.observations.at(-1), 0);
+  assert.equal(f.overlay.hidden.length > 0, true);
+  assert.deepEqual(filters.settings, { enabled: true, type: 8 });
+  assert.equal(f.bar.hides, 1);
+  assert.equal(f.timerBar.shutdowns, 1);
+});
+
+test("restoring after a wall-clock rollback preserves the saved deadline", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  const started = f.controller.start({ goalId, intention: "", durationMinutes: 25 }).session;
+  assert.equal(started.status, "active");
+  const deadline = started.status === "active" ? started.endsAt : null;
+
+  const refusingStore = new FailingSessionStore(f.directory, () => "goal-00000002-test");
+  refusingStore.failSessionWrites = true;
+  const originalCheckpoint = structuredClone(refusingStore.load().session);
+  const originalError = console.error;
+  console.error = () => undefined;
+  const earlier = await fixture(
+    context,
+    f.directory,
+    undefined,
+    undefined,
+    f.clock.now - 10 * 60_000,
+    refusingStore
+  );
+  console.error = originalError;
+  const restored = earlier.controller.view().session;
+  assert.equal(restored.status, "active");
+  assert.equal(restored.status === "active" ? restored.endsAt : null, deadline);
+  assert.equal(restored.status === "active" ? restored.totalMs : 0, 35 * 60_000,
+    "the effective total grows so elapsed time never becomes negative");
+  assert.deepEqual(refusingStore.load().session, originalCheckpoint,
+    "a failed normalization keeps the original valid checkpoint without blocking restore");
+  refusingStore.failSessionWrites = false;
+});
+
+test("an expired checkpoint that cannot be cleared never blocks startup", async (context) => {
+  const directory = await testDirectory(context);
+  const seed = new FocusStore(directory, () => "goal-00000001-test");
+  const goal = seed.saveGoal({ title: "Finish", why: "", currentFocus: "" }).goal;
+  seed.saveSession({
+    id: "session-expired",
+    goal,
+    intention: "",
+    startedAt: new Date(START_OF_TEST_TIME - 30 * 60_000).toISOString(),
+    endsAt: new Date(START_OF_TEST_TIME - 5 * 60_000).toISOString(),
+    totalMs: 25 * 60_000,
+    pausedRemainingMs: null,
+    snoozedUntil: null
+  });
+  const refusingStore = new FailingSessionStore(directory, () => "goal-00000002-test");
+  refusingStore.failSessionWrites = true;
+
+  const originalError = console.error;
+  console.error = () => undefined;
+  const f = await fixture(
+    context,
+    directory,
+    undefined,
+    undefined,
+    START_OF_TEST_TIME,
+    refusingStore
+  );
+  console.error = originalError;
+
+  assert.equal(f.controller.view().session.status, "idle");
+  assert.equal(refusingStore.load().session?.id, "session-expired",
+    "the still-expired record can be retried on a later launch");
+  refusingStore.failSessionWrites = false;
+});
+
+test("repeated legal edits can persist a session whose total exceeds one day", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 240 });
+
+  for (let extension = 0; extension < 7; extension += 1) {
+    f.clock.now += 239 * 60_000;
+    f.controller.editSession({ remainingMinutes: 240 });
+  }
+
+  const session = f.controller.view().session;
+  assert.equal(session.status, "active");
+  assert.equal(session.status === "active" && session.totalMs > 24 * 60 * 60_000, true);
+  assert.equal(f.store.load().session?.totalMs, session.status === "active" ? session.totalMs : 0);
 });

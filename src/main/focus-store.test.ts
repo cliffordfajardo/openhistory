@@ -23,10 +23,12 @@ test("starts empty, creates goals privately and selects the first one", async (c
       durationMinutes: 25,
       experience: "amber",
       amberEdge: true,
-      barPresentation: "floating"
+      barPresentation: "floating",
+      showTimerBar: false
     },
     barPosition: null,
-    barWidth: 460
+    barWidth: 460,
+    session: null
   });
 
   const { goal } = store.saveGoal({ title: "  Ship\tthe   guide ", why: "Readers\r\nare waiting", currentFocus: "Outline" });
@@ -67,14 +69,16 @@ test("persists normalized distracting sites and duration", async (context) => {
     durationMinutes: 50,
     experience: "amber",
     amberEdge: true,
-    barPresentation: "floating"
+    barPresentation: "floating",
+    showTimerBar: false
   });
   assert.deepEqual(new FocusStore(directory).load().preferences, {
     domains: ["social.example", "video.example"],
     durationMinutes: 50,
     experience: "amber",
     amberEdge: true,
-    barPresentation: "floating"
+    barPresentation: "floating",
+    showTimerBar: false
   });
 });
 
@@ -100,7 +104,8 @@ test("files from before the separate amber edge keep their look", async (context
       durationMinutes: 25,
       experience: experience ?? "amber",
       amberEdge,
-      barPresentation: "floating"
+      barPresentation: "floating",
+      showTimerBar: false
     }, String(experience));
     assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   }
@@ -116,7 +121,8 @@ test("persists the amber edge independently of the grayscale choice", async (con
     durationMinutes: 25,
     experience: "grayscale_screen",
     amberEdge: false,
-    barPresentation: "floating"
+    barPresentation: "floating",
+    showTimerBar: false
   });
 });
 
@@ -185,10 +191,12 @@ test("reads files saved before reminder styles as amber without losing goals or 
       durationMinutes: 50,
       experience: "amber",
       amberEdge: true,
-      barPresentation: "floating"
+      barPresentation: "floating",
+      showTimerBar: false
     },
     barPosition: null,
-    barWidth: 460
+    barWidth: 460,
+    session: null
   });
   assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   assert.deepEqual(readdirSync(directory), ["focus.json"]);
@@ -204,15 +212,88 @@ test("reads files saved before reminder styles as amber without losing goals or 
   assert.equal(new FocusStore(directory).load().preferences.experience, "grayscale_window");
 });
 
-test("never stores an active session", async (context) => {
+test("stores only the session's clock, and only when that clock moves", async (context) => {
   const directory = await testDirectory(context);
   const store = new FocusStore(directory, sequentialIds());
-  store.saveGoal({ title: "Goal", why: "", currentFocus: "" });
-  const stored = JSON.parse(readFileSync(store.path, "utf8")) as Record<string, unknown>;
+  const goal = store.saveGoal({ title: "Goal", why: "", currentFocus: "" }).goal;
+  const withoutSession = JSON.parse(readFileSync(store.path, "utf8")) as Record<string, unknown>;
   assert.deepEqual(
-    Object.keys(stored).sort(),
-    ["barPosition", "barWidth", "goals", "preferences", "selectedGoalId", "version"]
+    Object.keys(withoutSession).sort(),
+    ["barPosition", "barWidth", "goals", "preferences", "selectedGoalId", "session", "version"]
   );
+  assert.equal(withoutSession.session, null, "no session is saved until one runs");
+
+  const running = {
+    id: "session-1",
+    goal,
+    intention: "Write the intro",
+    startedAt: "2026-09-23T10:00:00.000Z",
+    endsAt: "2026-09-23T10:25:00.000Z",
+    totalMs: 1_500_000,
+    pausedRemainingMs: null,
+    snoozedUntil: null
+  };
+  store.saveSession(running);
+  assert.deepEqual(new FocusStore(directory).load().session, running);
+  const stored = JSON.parse(readFileSync(store.path, "utf8")) as { session: Record<string, unknown> };
+  assert.deepEqual(
+    Object.keys(stored.session).sort(),
+    ["endsAt", "goal", "id", "intention", "pausedRemainingMs", "snoozedUntil", "startedAt", "totalMs"],
+    "nothing about the foreground, the reminders or the panels is saved"
+  );
+
+  writeFileSync(store.path, "still the same file");
+  for (let repeat = 0; repeat < 5; repeat += 1) store.saveSession({ ...running });
+  assert.equal(readFileSync(store.path, "utf8"), "still the same file",
+    "an unchanged clock never touches the disk");
+
+  store.saveSession({ ...running, endsAt: null, pausedRemainingMs: 900_000 });
+  assert.equal(new FocusStore(directory).load().session?.pausedRemainingMs, 900_000);
+  store.saveSession(null);
+  assert.equal(new FocusStore(directory).load().session, null);
+});
+
+test("refuses a saved session that is not exactly one clock", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FocusStore(directory, sequentialIds());
+  const goal = store.saveGoal({ title: "Goal", why: "", currentFocus: "" }).goal;
+  const valid = {
+    id: "session-1",
+    goal,
+    intention: "",
+    startedAt: "2026-09-23T10:00:00.000Z",
+    endsAt: "2026-09-23T10:25:00.000Z",
+    totalMs: 1_500_000,
+    pausedRemainingMs: null,
+    snoozedUntil: null
+  };
+  assert.throws(() => store.saveSession({ ...valid, pausedRemainingMs: 900_000 }), "two clocks");
+  assert.throws(() => store.saveSession({ ...valid, endsAt: null }), "no clock at all");
+  assert.throws(() => store.saveSession({ ...valid, endsAt: "whenever" }));
+  assert.throws(() => store.saveSession({ ...valid, totalMs: 0 }));
+  assert.throws(() => store.saveSession({
+    ...valid,
+    endsAt: null,
+    pausedRemainingMs: valid.totalMs + 1
+  }), "more time left than the session was ever given");
+  assert.equal(new FocusStore(directory).load().session, null, "no rejected session reaches the file");
+});
+
+test("a malformed saved session is dropped without losing goals or preferences", async (context) => {
+  const directory = await testDirectory(context);
+  writeFileSync(resolve(directory, "focus.json"), JSON.stringify({
+    version: 1,
+    goals: [{ id: "goal-00000001-test", title: "Kept", why: "", currentFocus: "" }],
+    selectedGoalId: "goal-00000001-test",
+    preferences: { domains: ["video.example"], durationMinutes: 50, amberEdge: true },
+    session: { id: "session-1", goal: "gone", totalMs: "forever" }
+  }));
+  const store = new FocusStore(directory, sequentialIds(), () => 4321);
+  assert.equal(store.recoveredFromInvalidFile, false, "a bad session never quarantines a good file");
+  assert.equal(store.load().session, null);
+  assert.equal(store.load().goals[0]?.title, "Kept");
+  assert.deepEqual(store.load().preferences.domains, ["video.example"]);
+  assert.deepEqual(readdirSync(directory), ["focus.json"]);
 });
 
 test("recovers from malformed files by starting fresh and preserving the original", async (context) => {

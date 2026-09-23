@@ -99,6 +99,24 @@ export type FocusInput =
     domains: string[];
     durationMinutes: number;
   }
+  /**
+   * A session saved by an earlier launch. `remainingMs` is what its own clock says is left now and
+   * is always honored; the elapsed time is whatever the planned length has left over. The deadline
+   * is rebuilt from here rather than trusted from the file.
+   */
+  | {
+    type: "restore";
+    now: number;
+    sessionId: string;
+    goal: Goal;
+    intention: string;
+    domains: string[];
+    startedAt: number;
+    totalMs: number;
+    remainingMs: number;
+    paused: boolean;
+    snoozedUntil: number | null;
+  }
   | { type: "stop"; now: number }
   | { type: "domains_changed"; now: number; domains: string[] }
   | { type: "snooze"; now: number }
@@ -222,6 +240,37 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
       state.lastNudgeAt = undefined;
       state.dismissedUntil = undefined;
       effects.push({ type: "observe", generation: state.generationCounter });
+      break;
+    }
+    case "restore": {
+      if (state.session.status === "active") break;
+      const usable = Number.isFinite(input.totalMs) && input.totalMs > 0 &&
+        Number.isFinite(input.remainingMs) && input.remainingMs > 0 &&
+        Number.isFinite(input.startedAt);
+      if (!usable) break;
+      // The remaining time is never shortened to fit the planned length: a clock that moved
+      // backwards would otherwise silently cut the session short. The planned length grows to
+      // cover it instead, so the share already spent stays between 0 and 1.
+      const totalMs = Math.max(input.totalMs, input.remainingMs);
+      state.generationCounter += 1;
+      state.session = {
+        status: "active",
+        id: input.sessionId,
+        goal: structuredClone(input.goal),
+        intention: input.intention,
+        domains: [...input.domains],
+        startedAt: input.startedAt,
+        runningSince: input.paused ? null : now,
+        accumulatedMs: totalMs - input.remainingMs,
+        totalMs,
+        snoozedUntil: input.snoozedUntil,
+        generation: state.generationCounter
+      };
+      state.evidence = undefined;
+      state.lastNudgeId = undefined;
+      state.lastNudgeAt = undefined;
+      state.dismissedUntil = undefined;
+      effects.push({ type: "observe", generation: input.paused ? 0 : state.generationCounter });
       break;
     }
     case "domains_changed":

@@ -461,7 +461,7 @@ final class FocusGrayscaleController {
             return nil
         }
         let hostWindowNumbers = Set(NSApp.windows.compactMap { window -> CGWindowID? in
-            guard !(window is FocusOverlayPanel), !(window is FocusBarPanel),
+            guard !(window is FocusOverlayPanel), !(window is FocusBarPanel), !(window is TimerBarPanel),
                   window.isVisible, window.windowNumber > 0 else { return nil }
             return CGWindowID(window.windowNumber)
         })

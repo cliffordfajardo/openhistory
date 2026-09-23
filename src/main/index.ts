@@ -425,6 +425,25 @@ function refreshTray(): void {
   tray.setToolTip(`${APP_IDENTITY.productName} — ${trayStateLabel(state)}`);
 }
 
+/** Tray callbacks have no renderer promise to reject, so keep failures out of Electron's loop. */
+function runTrayAction(action: string, callback: () => void): void {
+  try {
+    callback();
+  } catch (error) {
+    console.error(`Unable to ${action}`, {
+      name: error instanceof Error ? error.name : "UnknownError"
+    });
+    try {
+      dialog.showErrorBox(
+        "OpenHistory Focus couldn’t complete that action",
+        "Try again. If the problem continues, check that the app’s data folder is writable."
+      );
+    } catch {
+    }
+    refreshTray();
+  }
+}
+
 function focusTrayItems(): Electron.MenuItemConstructorOptions[] {
   const view = focus?.view();
   const session = view?.session;
@@ -438,29 +457,37 @@ function focusTrayItems(): Electron.MenuItemConstructorOptions[] {
       enabled: false
     },
     paused
-      ? { label: "Resume Session", click: () => { focus?.resumeSession(); } }
-      : { label: "Pause Session", click: () => { focus?.pauseSession(); } },
-    { label: "Complete Session", click: () => { focus?.stop(); } },
+      ? { label: "Resume Session", click: () => runTrayAction("resume the Focus session", () => {
+        focus?.resumeSession();
+      }) }
+      : { label: "Pause Session", click: () => runTrayAction("pause the Focus session", () => {
+        focus?.pauseSession();
+      }) },
+    { label: "Complete Session", click: () => runTrayAction("complete the Focus session", () => {
+      focus?.stop();
+    }) },
     session.snoozedUntil
-      ? { label: "Resume Reminders", click: () => { focus?.resume(); } }
-      : { label: "Snooze Reminders for 5 Minutes", click: () => { focus?.snooze(); } },
+      ? { label: "Resume Reminders", click: () => runTrayAction("resume Focus reminders", () => {
+        focus?.resume();
+      }) }
+      : { label: "Snooze Reminders for 5 Minutes", click: () => runTrayAction(
+        "snooze Focus reminders",
+        () => { focus?.snooze(); }
+      ) },
     { label: "Edit Session…", click: openFocusEditor },
     { type: "separator" },
     floating
-      ? { label: "Move Session to Menu Bar", click: () => { focus?.setBarPresentation("menuBar"); } }
-      : { label: "Show Floating Bar", click: () => { focus?.setBarPresentation("floating"); } },
+      ? { label: "Move Session to Menu Bar", click: () => runTrayAction(
+        "move the Focus session to the menu bar",
+        () => { focus?.setBarPresentation("menuBar"); }
+      ) }
+      : { label: "Show Floating Bar", click: () => runTrayAction("show the Focus bar", () => {
+        focus?.setBarPresentation("floating");
+      }) },
     {
       label: "Focus Floating Bar",
       enabled: view.barAvailable,
-      click: () => {
-        try {
-          focus?.focusBar();
-        } catch (error) {
-          console.error("Unable to focus the Focus bar", {
-            name: error instanceof Error ? error.name : "UnknownError"
-          });
-        }
-      }
+      click: () => runTrayAction("focus the Focus bar", () => { focus?.focusBar(); })
     },
     { type: "separator" }
   ];
@@ -505,7 +532,10 @@ function showTrayContextMenu(): void {
     { type: "separator" },
     ...focusTrayItems(),
     windowItem,
-    { label: collector.enabled ? "Pause Capture" : "Resume Capture", click: toggleCollectionFromTray },
+    {
+      label: collector.enabled ? "Pause Capture" : "Resume Capture",
+      click: () => runTrayAction("change activity capture", toggleCollectionFromTray)
+    },
     { label: "Settings…", click: openSettingsFromTray },
     { type: "separator" },
     { label: "Quit OpenHistory Focus", role: "quit" }
@@ -751,10 +781,12 @@ async function initialize(): Promise<void> {
     journalPath: join(app.getPath("userData"), "focus-color-filter-restore.json")
   });
   const focusBar = collector.focusBar();
+  const timerBar = collector.timerBar();
   focus = new FocusController({
     store: new FocusStore(config.dataDirectory),
     overlay: collector.focusOverlay(),
     ...(focusBar ? { bar: focusBar } : {}),
+    ...(timerBar ? { timerBar } : {}),
     screenCapture: collector.focusScreenCapture(),
     systemFilter: systemColorFilter,
     setForegroundObservation: (generation) => collector.setForegroundObservation(generation),
@@ -1154,6 +1186,8 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.editFocusSession, (_event, edit: unknown) => focus!.editSession(edit));
   handleTrustedIpc(IPC_CHANNELS.setFocusBarPresentation, (_event, presentation: unknown) =>
     focus!.setBarPresentation(presentation));
+  handleTrustedIpc(IPC_CHANNELS.setFocusShowTimerBar, (_event, showTimerBar: unknown) =>
+    focus!.setShowTimerBar(showTimerBar));
   handleTrustedIpc(IPC_CHANNELS.focusFocusBar, () => focus!.focusBar());
   handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
   handleTrustedIpc(IPC_CHANNELS.setFocusExperience, (_event, experience: unknown) =>
@@ -1188,6 +1222,13 @@ async function initialize(): Promise<void> {
     mainWindow?.webContents.send(IPC_CHANNELS.collectorState, state);
     refreshTray();
     focus?.refreshCapability();
+  });
+
+  // Timers do not advance reliably while the Mac sleeps, so a session whose deadline passed
+  // overnight ends on the first wake rather than waiting for the next second to arrive.
+  powerMonitor.on("resume", () => {
+    focus?.wake();
+    refreshTray();
   });
 
   if (appPresentationMode === "menuBar") {
@@ -1262,7 +1303,7 @@ app.on("before-quit", () => {
   if (appPresentationModeTimer) clearTimeout(appPresentationModeTimer);
   if (menuBarBlurTimer) clearTimeout(menuBarBlurTimer);
   stopFocusCountdown();
-  focus?.shutdown();
+  focus?.shutdown({ retainSession: true });
   systemColorFilter?.shutdown();
   collector?.stop();
   void agentMcp?.stop();

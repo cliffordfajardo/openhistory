@@ -1,10 +1,11 @@
-import type {
-  FocusEffectFallbackReason,
-  FocusExperience,
-  FocusScreenCaptureAccess,
-  FocusViewState,
-  Goal,
-  GoalDraft
+import {
+  type FocusEffectFallbackReason,
+  type FocusExperience,
+  type FocusScreenCaptureAccess,
+  type FocusViewState,
+  type Goal,
+  type GoalDraft,
+  type PersistedFocusSession
 } from "@shared/focus";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -28,6 +29,11 @@ import {
   GoalIdSchema,
   firstIssueMessage
 } from "./focus-schemas";
+import {
+  timerBarRequest,
+  type TimerBarRequest,
+  type TimerBarResult
+} from "./focus-timer-bar";
 import {
   detectionState,
   effectView,
@@ -90,6 +96,16 @@ export interface FocusBarBinding {
   setActionHandler(handler: ((line: string) => void) | null): void;
 }
 
+/**
+ * The native timer bar: one passive strip per display over the menu region. It draws whatever the
+ * last request said and keeps no clock, so it can never disagree with the session.
+ */
+export interface TimerBarBinding {
+  update(request: TimerBarRequest): TimerBarResult;
+  /** Removes every panel and observer; used when the preference is off and when Focus shuts down. */
+  shutdown(): void;
+}
+
 /** macOS Screen Recording access. `access` never prompts; `request` may show the system prompt once. */
 export interface FocusScreenCaptureBinding {
   access(): boolean;
@@ -101,6 +117,8 @@ export interface FocusControllerOptions {
   overlay: FocusOverlayBinding | undefined;
   /** Absent where the native bridge predates the floating bar; the menu bar then carries it. */
   bar?: FocusBarBinding;
+  /** Absent where the native bridge predates the timer bar; the preference is then unavailable. */
+  timerBar?: TimerBarBinding;
   /** Absent when the native bridge can't capture; grayscale then falls back to amber. */
   screenCapture?: FocusScreenCaptureBinding;
   /** Owns system grayscale; absent where the native bridge lacks it. */
@@ -147,11 +165,21 @@ const SHOW_FALLBACK_REASONS: Partial<Record<FocusOverlayShowResult, FocusEffectF
   shown_fallback_window_spans_displays: "window_spans_displays"
 };
 
+/** How Focus is being torn down. Only a quit keeps the saved session for the next launch. */
+export interface FocusShutdownOptions {
+  /**
+   * Keep the saved session record so the next launch resumes it. Deleting local data must never
+   * set this: a deleted session cannot come back.
+   */
+  retainSession?: boolean;
+}
+
 export class FocusController extends EventEmitter {
   private machine: FocusMachineState;
   private timer: unknown;
   private lastEmittedView = "";
   private lastBarSnapshot = "";
+  private lastTimerBarRequest = "";
   private readonly now: () => number;
   private readonly idleSeconds: () => number;
   private readonly createSessionId: () => string;
@@ -171,16 +199,49 @@ export class FocusController extends EventEmitter {
       setInterval: (callback, milliseconds) => setInterval(callback, milliseconds),
       clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>)
     };
-    const preferences = options.store.load().preferences;
+    const document = options.store.load();
     this.machine = initialFocusState(
       this.currentCapability(),
-      preferences.experience,
+      document.preferences.experience,
       this.currentScreenCapture(),
-      preferences.amberEdge,
+      document.preferences.amberEdge,
       Boolean(options.systemFilter?.available)
     );
-    options.overlay?.setActionHandler((line) => this.handleOverlayAction(line));
-    options.bar?.setActionHandler((line) => this.handleBarAction(line));
+    options.overlay?.setActionHandler((line) => this.runAutomaticAction(
+      "Unable to handle the Focus reminder action",
+      () => this.handleOverlayAction(line)
+    ));
+    options.bar?.setActionHandler((line) => this.runAutomaticAction(
+      "Unable to handle the Focus bar action",
+      () => this.handleBarAction(line)
+    ));
+    this.restoreSavedSession(document.session);
+  }
+
+  private restoreSavedSession(saved: PersistedFocusSession | null): void {
+    if (!saved) return;
+    const now = this.now();
+    const remainingMs = saved.endsAt === null
+      ? Math.max(0, saved.pausedRemainingMs ?? 0)
+      : Math.max(0, Date.parse(saved.endsAt) - now);
+    if (remainingMs <= 0) {
+      this.tryWriteSessionRecord(null, "Unable to clear the expired Focus session");
+      return;
+    }
+    this.dispatch({
+      type: "restore",
+      now,
+      sessionId: saved.id,
+      goal: saved.goal,
+      intention: saved.intention,
+      domains: this.options.store.load().preferences.domains,
+      startedAt: Date.parse(saved.startedAt),
+      totalMs: saved.totalMs,
+      remainingMs,
+      paused: saved.endsAt === null,
+      snoozedUntil: saved.snoozedUntil === null ? null : Date.parse(saved.snoozedUntil)
+    }, "bestEffort");
+    this.publish();
   }
 
   view(): FocusViewState {
@@ -203,6 +264,7 @@ export class FocusController extends EventEmitter {
       effect: effectView(this.machine),
       barPosition: document.barPosition,
       barAvailable: Boolean(this.options.bar),
+      timerBarAvailable: Boolean(this.options.timerBar),
       recoveredFromInvalidFile: this.options.store.recoveredFromInvalidFile
     };
   }
@@ -383,6 +445,19 @@ export class FocusController extends EventEmitter {
     return this.publish();
   }
 
+  /**
+   * Saves whether the timer bar is shown. It is independent of where the session is shown, so it
+   * can be on with the floating bar, with the menu bar alone, or with both.
+   */
+  setShowTimerBar(value: unknown): FocusViewState {
+    const showTimerBar = parseOrThrow(z.boolean(), value, "Choose whether to show the timer bar");
+    if (showTimerBar && !this.options.timerBar) {
+      throw new Error("The timer bar isn’t available in this build");
+    }
+    this.options.store.updatePreferences({ showTimerBar });
+    return this.publish();
+  }
+
   /** Makes the floating bar key so its controls can be used from the keyboard. */
   focusBar(): FocusViewState {
     if (!this.options.bar) throw new Error("The floating bar isn't available in this build");
@@ -435,32 +510,51 @@ export class FocusController extends EventEmitter {
   }
 
   handleEvidence(evidence: ForegroundEvidence): void {
-    this.dispatch({ type: "evidence", now: this.now(), evidence });
-    this.publish();
+    this.runAutomaticAction("Unable to process Focus foreground evidence", () => {
+      this.dispatch({ type: "evidence", now: this.now(), evidence });
+      this.publish();
+    });
   }
 
   /** The collector restarted or stopped: sequence numbers restart, so forget prior evidence. */
   resetEvidence(): void {
-    const session = this.machine.session;
-    if (session.status !== "active") return;
-    this.machine = { ...this.machine, evidence: undefined };
-    this.dispatch({ type: "tick", now: this.now() });
-    this.publish();
+    this.runAutomaticAction("Unable to reset Focus foreground evidence", () => {
+      const session = this.machine.session;
+      if (session.status !== "active") return;
+      this.machine = { ...this.machine, evidence: undefined };
+      this.dispatch({ type: "tick", now: this.now() });
+      this.publish();
+    });
   }
 
   refreshCapability(): void {
-    this.dispatch({ type: "capability", now: this.now(), capability: this.currentCapability() });
-    this.syncScreenCapture();
-    this.publish();
+    this.runAutomaticAction("Unable to refresh Focus capability", () => {
+      this.dispatch({ type: "capability", now: this.now(), capability: this.currentCapability() });
+      this.syncScreenCapture();
+      this.publish();
+    });
+  }
+
+  /**
+   * The Mac woke, or something else moved the clock: re-evaluates the session now rather than
+   * waiting up to a second, so one that ran out while the Mac slept ends immediately.
+   */
+  wake(): void {
+    if (this.shutDown) return;
+    this.tick();
   }
 
   /**
    * Ends any session and removes reminders before quit or data deletion; ending a system
-   * grayscale reminder restores the earlier Color Filters settings synchronously.
+   * grayscale reminder restores the earlier Color Filters settings synchronously. The session
+   * always ends in memory and every native panel goes away; `retainSession` only decides whether
+   * the saved record survives for the next launch, so deleting local data can never bring one back.
    */
-  shutdown(): void {
+  shutdown(options: FocusShutdownOptions = {}): void {
     if (this.shutDown) return;
-    this.dispatch({ type: "stop", now: this.now() });
+    const retained = options.retainSession === true ? this.sessionRecord() : null;
+    this.tryWriteSessionRecord(retained, "Unable to save the Focus session during shutdown");
+    this.dispatch({ type: "stop", now: this.now() }, "skip");
     if (this.machine.preview) {
       this.options.overlay?.hide(this.machine.preview.id, true);
       this.machine = { ...this.machine, preview: undefined };
@@ -470,6 +564,7 @@ export class FocusController extends EventEmitter {
     this.options.overlay?.setActionHandler(null);
     this.hideBar();
     this.options.bar?.setActionHandler(null);
+    this.hideTimerBar();
   }
 
   private handleBarAction(line: string): void {
@@ -546,6 +641,74 @@ export class FocusController extends EventEmitter {
     }
   }
 
+  private syncTimerBar(): void {
+    const timerBar = this.options.timerBar;
+    if (!timerBar) return;
+    const enabled = !this.shutDown && this.options.store.load().preferences.showTimerBar;
+    const request = timerBarRequest(sessionView(this.machine), this.now(), enabled);
+    const serialized = JSON.stringify(request);
+    if (request.session === null && serialized === this.lastTimerBarRequest) return;
+    try {
+      this.lastTimerBarRequest = timerBar.update(request) === "applied" ? serialized : "";
+    } catch (error) {
+      this.lastTimerBarRequest = "";
+      console.error("Unable to update the Focus timer bar", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
+  private hideTimerBar(): void {
+    const timerBar = this.options.timerBar;
+    if (!timerBar) return;
+    this.lastTimerBarRequest = "";
+    try {
+      timerBar.shutdown();
+    } catch (error) {
+      console.error("Unable to remove the Focus timer bar", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
+  private sessionRecord(state: FocusMachineState = this.machine): PersistedFocusSession | null {
+    const session = sessionView(state);
+    if (session.status !== "active") return null;
+    return {
+      id: session.id,
+      goal: session.goal,
+      intention: session.intention,
+      startedAt: session.startedAt,
+      endsAt: session.endsAt,
+      totalMs: Math.round(session.totalMs),
+      pausedRemainingMs: session.pausedRemainingMs === null
+        ? null
+        : Math.max(0, Math.round(session.pausedRemainingMs)),
+      snoozedUntil: session.snoozedUntil
+    };
+  }
+
+  private tryWriteSessionRecord(record: PersistedFocusSession | null, message: string): void {
+    try {
+      this.options.store.saveSession(record);
+    } catch (error) {
+      console.error(message, {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
+  /** EventEmitter and native callbacks have no caller that can receive a persistence exception. */
+  private runAutomaticAction(message: string, action: () => void): void {
+    try {
+      action();
+    } catch (error) {
+      console.error(message, {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
   private hideBar(): void {
     if (!this.options.bar || this.lastBarSnapshot === "") return;
     this.lastBarSnapshot = "";
@@ -591,9 +754,18 @@ export class FocusController extends EventEmitter {
     this.publish();
   }
 
-  private dispatch(input: FocusInput): void {
+  private dispatch(
+    input: FocusInput,
+    persistence: "required" | "bestEffort" | "skip" = "required"
+  ): void {
     if (this.shutDown) return;
     const transition = reduceFocus(this.machine, input);
+    const record = this.sessionRecord(transition.state);
+    if (persistence === "required") {
+      this.options.store.saveSession(record);
+    } else if (persistence === "bestEffort") {
+      this.tryWriteSessionRecord(record, "Unable to normalize the restored Focus session");
+    }
     this.machine = transition.state;
     for (const effect of transition.effects) this.perform(effect);
     this.syncTimer();
@@ -676,16 +848,24 @@ export class FocusController extends EventEmitter {
   }
 
   private tick(): void {
-    let idleSeconds = 0;
     try {
-      idleSeconds = this.idleSeconds();
-    } catch {
-      idleSeconds = 0;
+      let idleSeconds = 0;
+      try {
+        idleSeconds = this.idleSeconds();
+      } catch {
+        idleSeconds = 0;
+      }
+      this.dispatch({ type: "capability", now: this.now(), capability: this.currentCapability() });
+      this.syncScreenCapture();
+      this.dispatch({ type: "tick", now: this.now(), idleSeconds });
+      this.publish();
+    } catch (error) {
+      // Interval callbacks have no caller to receive a storage error. Keep the old state and timer
+      // alive so the next heartbeat retries the same durable transition.
+      console.error("Unable to advance the Focus session", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
     }
-    this.dispatch({ type: "capability", now: this.now(), capability: this.currentCapability() });
-    this.syncScreenCapture();
-    this.dispatch({ type: "tick", now: this.now(), idleSeconds });
-    this.publish();
   }
 
   private applyExperience(experience: FocusExperience): void {
@@ -729,6 +909,7 @@ export class FocusController extends EventEmitter {
 
   private publish(): FocusViewState {
     this.syncBar();
+    this.syncTimerBar();
     const view = this.view();
     const serialized = JSON.stringify(view);
     if (serialized !== this.lastEmittedView) {

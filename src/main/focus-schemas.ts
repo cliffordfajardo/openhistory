@@ -10,7 +10,8 @@ import {
   type FocusPreferences,
   type FocusSessionEdit,
   type FocusStartRequest,
-  type GoalDraft
+  type GoalDraft,
+  type PersistedFocusSession
 } from "@shared/focus";
 import { z } from "zod";
 
@@ -117,7 +118,9 @@ export const FocusPreferencesSchema: z.ZodType<FocusPreferences> = z.preprocess(
   experience: FocusExperienceSchema.default("amber"),
   amberEdge: z.boolean(),
   /** Files written before the floating bar existed get it, matching a fresh install. */
-  barPresentation: FocusBarPresentationSchema.default("floating")
+  barPresentation: FocusBarPresentationSchema.default("floating"),
+  /** Off for files written before the timer bar existed and for fresh installs alike. */
+  showTimerBar: z.boolean().default(false)
 }).strict());
 
 /** Renderer input. An omitted `experience` keeps the saved one instead of resetting it. */
@@ -133,13 +136,45 @@ export const FocusStartRequestSchema: z.ZodType<FocusStartRequest> = z.object({
   durationMinutes: DurationMinutesSchema
 }).strict();
 
+const IsoInstantSchema = z.string().max(40).refine(
+  (value) => Number.isFinite(Date.parse(value)),
+  { message: "Not a valid time" }
+);
+
+/**
+ * The saved session. It is validated strictly and on its own: exactly one clock, a whole goal
+ * copied at the time it started, and a total the remainder fits inside. Anything else is discarded
+ * rather than repaired, because a half-understood session would start the wrong countdown.
+ */
+export const PersistedFocusSessionSchema: z.ZodType<PersistedFocusSession> = z.object({
+  id: z.string().min(1).max(100),
+  goal: GoalSchema,
+  intention: multiLine(FOCUS_LIMITS.intention),
+  startedAt: IsoInstantSchema,
+  endsAt: IsoInstantSchema.nullable(),
+  totalMs: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  pausedRemainingMs: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+  snoozedUntil: IsoInstantSchema.nullable()
+}).strict().refine(
+  (session) => (session.endsAt === null) !== (session.pausedRemainingMs === null),
+  { message: "A saved session has a deadline or a frozen remainder, never both" }
+).refine(
+  (session) => session.pausedRemainingMs === null || session.pausedRemainingMs <= session.totalMs,
+  { message: "A saved session cannot have more time left than it was ever given" }
+);
+
 export const FocusDocumentSchema = z.object({
   version: z.literal(1),
   goals: z.array(GoalSchema).max(FOCUS_LIMITS.goals),
   selectedGoalId: GoalIdSchema.nullable(),
   preferences: FocusPreferencesSchema,
   barPosition: FocusBarPositionSchema.nullable().default(null),
-  barWidth: FocusBarWidthSchema.default(FOCUS_BAR_WIDTH.default)
+  barWidth: FocusBarWidthSchema.default(FOCUS_BAR_WIDTH.default),
+  /**
+   * A malformed session is dropped here instead of failing the whole file: goals, sites and
+   * preferences are worth keeping even when the session that was running is not understood.
+   */
+  session: PersistedFocusSessionSchema.nullable().catch(null).default(null)
 }).strict().superRefine((document, context) => {
   const ids = new Set<string>();
   for (const goal of document.goals) {

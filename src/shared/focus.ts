@@ -91,6 +91,11 @@ export interface FocusPreferences {
   /** Warm edge around the display, independent of grayscale. */
   amberEdge: boolean;
   barPresentation: FocusBarPresentation;
+  /**
+   * The strip across the menu region of every display that shrinks as the session runs. Off unless
+   * it is chosen, and independent of `barPresentation`: either, both or neither can be on.
+   */
+  showTimerBar: boolean;
 }
 
 /**
@@ -172,6 +177,25 @@ export type FocusSession =
 
 export type ActiveFocusSession = Extract<FocusSession, { status: "active" }>;
 
+/**
+ * The one session record kept on disk so a session survives a quit or a crash. It holds the same
+ * clock the running session publishes and an immutable copy of the goal, so a session whose goal
+ * was deleted still comes back. Nothing about the foreground, the reminders or the overlays is
+ * stored: after a restart, a reminder needs fresh evidence just as it does after a pause.
+ */
+export interface PersistedFocusSession {
+  id: string;
+  goal: Goal;
+  intention: string;
+  startedAt: string;
+  /** Deadline while the session runs; null while it is paused. */
+  endsAt: string | null;
+  totalMs: number;
+  /** The frozen remainder while paused; null while the deadline decides. */
+  pausedRemainingMs: number | null;
+  snoozedUntil: string | null;
+}
+
 /** Time left in a session: frozen while paused, counted down from the deadline while running. */
 export function focusSessionRemainingMs(session: ActiveFocusSession, now: number): number {
   if (session.endsAt === null) return Math.max(0, session.pausedRemainingMs ?? 0);
@@ -236,6 +260,8 @@ export interface FocusViewState {
   barPosition: FocusBarPosition | null;
   /** The native floating bar exists in this build. */
   barAvailable: boolean;
+  /** The native timer bar exists in this build; without it the preference cannot be honored. */
+  timerBarAvailable: boolean;
   recoveredFromInvalidFile: boolean;
 }
 

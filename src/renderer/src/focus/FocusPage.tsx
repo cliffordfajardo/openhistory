@@ -427,7 +427,7 @@ function ActiveSessionCard({
       {editing ? <EditSessionForm focus={focus} onDone={() => setEditing(false)} setState={setState} /> : null}
       {previewMessage ? <p className="focus-quiet" role="status">{previewMessage}</p> : null}
       <p className="focus-honest-note">
-        Watching {session.domains.length} {session.domains.length === 1 ? "site" : "sites"}. Pausing freezes the countdown and stops reminders; snooze only quiets reminders while the clock keeps running. Sessions don’t resume after the app restarts.
+        Watching {session.domains.length} {session.domains.length === 1 ? "site" : "sites"}. Pausing freezes the countdown and stops reminders; snooze only quiets reminders while the clock keeps running. Sessions resume after restart. Paused time stays frozen; running sessions keep counting down while the app is closed.
       </p>
     </div>
   );
@@ -538,6 +538,7 @@ function SessionDisplayCard({
   const [error, setError] = useState<string>();
   const presentation = focus.preferences.barPresentation;
   const active = focus.session.status === "active";
+  const showTimerBar = focus.preferences.showTimerBar;
 
   async function run(action: () => Promise<FocusViewState>): Promise<void> {
     setError(await focusAction(setState, action));
@@ -572,6 +573,24 @@ function SessionDisplayCard({
       </div>
       {!focus.barAvailable ? (
         <p className="focus-quiet">This build has no native floating bar, so the menu bar carries the session.</p>
+      ) : null}
+      <label className="focus-edge-toggle">
+        <input
+          checked={showTimerBar}
+          disabled={!focus.timerBarAvailable}
+          onChange={(event) => void run(() => window.openHistory.setFocusShowTimerBar(event.target.checked))}
+          type="checkbox"
+        />
+        <span>
+          <strong>Show timer bar</strong>
+          <small>
+            A quiet green bar across the top of the screen that shrinks as the time left runs out.
+            Every display shows the same one, and clicks pass straight through it.
+          </small>
+        </span>
+      </label>
+      {!focus.timerBarAvailable ? (
+        <p className="focus-quiet">This build has no native timer bar.</p>
       ) : null}
       {active && presentation === "floating" && focus.barAvailable ? (
         <div className="focus-actions">

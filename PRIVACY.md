@@ -23,7 +23,11 @@ Last updated: August 16, 2026
 > optional floating bar shows only what you already entered — the goal, the countdown and its
 > controls — and reads nothing from other apps; where you drag it is remembered as two screen
 > coordinates in the same private folder. Clicks on that bar and on the reminder card are excluded
-> from click recording, so app controls are never logged as activity in another app. Goals and Focus preferences are stored in the same private folder, are
+> from click recording, so app controls are never logged as activity in another app. An optional
+> timer bar draws only how much of the session is left, across the menu region of every display; it
+> is sent no goal, no intention and nothing about the browser, it takes no clicks, and it records
+> nothing. Goals, Focus preferences and one running session — its clock, its intention and a copy
+> of the goal it started with, so it survives a quit — are stored in the same private folder, are
 > removed by "Delete all local data", and are not sent to models or exposed through MCP. The
 > upstream auto-updater is disabled. See [docs/FOCUS.md](docs/FOCUS.md). Where this note and the
 > policy below differ, this note describes the fork.

@@ -282,6 +282,37 @@ test("exposes the floating bar only when the bridge has all of its calls", async
   assert.equal(handlers.at(-1), null);
 });
 
+test("exposes the timer bar on its own, independently of the floating bar", async (context) => {
+  const directory = await testDirectory(context);
+  const partial = Object.assign(new FakeNativeCollector(), { updateTimerBar: () => 0 });
+  assert.equal(new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, partial).timerBar(), undefined,
+    "an older bridge could not remove the panels again");
+
+  const requests: string[] = [];
+  let shutdowns = 0;
+  const native = Object.assign(new FakeNativeCollector(), {
+    updateTimerBar: (json: string) => {
+      requests.push(json);
+      return 0;
+    },
+    shutdownTimerBar: () => { shutdowns += 1; }
+  });
+  const service = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native);
+  assert.equal(service.focusBar(), undefined, "the timer bar does not need the floating bar");
+  const timerBar = service.timerBar();
+  assert(timerBar);
+  assert.equal(timerBar.update({
+    enabled: true,
+    session: { endsAtEpochSeconds: 1_800_001_500, pausedRemainingSeconds: null, totalSeconds: 1_500 }
+  }), "applied");
+  assert.deepEqual(JSON.parse(requests[0]!), {
+    enabled: true,
+    session: { endsAtEpochSeconds: 1_800_001_500, pausedRemainingSeconds: null, totalSeconds: 1_500 }
+  }, "no goal, intention or site ever reaches the timer bar");
+  timerBar.shutdown();
+  assert.equal(shutdowns, 1);
+});
+
 test("exposes Color Filters only when the bridge has both calls, passing settings as arguments", async (context) => {
   const directory = await testDirectory(context);
   const readOnly = Object.assign(new FakeNativeCollector(), { systemColorFilterRead: () => null });

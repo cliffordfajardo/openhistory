@@ -167,3 +167,54 @@ failed before correcting opposite-edge movement at display boundaries, then pass
 The app is left running with compact width and approximately the prior 6:38 PM session end time.
 Physical multi-display transitions, fullscreen/Spaces and exhaustive cursor behavior remain untested.
 The intermittent missing amber edge/card report above remains unresolved.
+
+## Persistent menu-region timer bar
+
+Validated on 23 September 2026, macOS 26.6.2, Apple Silicon. The timer bar uses the existing
+Focus session clock and heartbeat. It adds no screen capture, private API or permission request.
+A separate preference controls it independently of the floating bar.
+
+Automated checks cover running and paused checkpoints, expiry while closed, restored deadlines,
+clock rollback, fractional seconds, edits beyond 24 hours, malformed-file recovery, strict write
+validation and failed-write behavior. Semantic actions save their checkpoint before changing the
+live session. Normal quit retains the clock while removing overlays and restoring system colors;
+explicit completion and data deletion clear it. Unchanged ticks do not rewrite the file.
+
+A native fixture sampled the production mask between heartbeat ticks: its rendered width shrank
+through 1281.91, 1263.85, 1245.81 and 1227.38 points. Pause held exactly 0.7075 of the width with no
+animation. Reduce Motion held between heartbeats and stepped on the next update. An injected stale
+fraction of 0.9 recovered to 0.610443 against a deadline-derived expectation of 0.610442. Repeating an
+aligned request preserved its running animation. Enabled-idle retention, disabled cleanup and
+shutdown cleanup passed, with no native timer owned by the controller.
+
+The connected notched display reported a 1728×1117-point frame, a 33-point reserved menu region and
+2× backing scale. The panel used `(0, 1084, 1728, 33)`, exact status-bar level, no shadow,
+click-through/non-key flags and the requested Space/fullscreen collection flags. Foreground and key
+window identity stayed unchanged during the native test. These checks validate panel configuration;
+they do not prove visual ordering in every desktop configuration.
+
+The repository's runnable fixture (`npm run fixture:timer-bar`) also passes. It waits for compositor
+updates before sampling pause and Reduce Motion, rather than treating an immediate stale presentation
+layer as a failure. Pure placement tests cover differing display heights, negative coordinates,
+notch insets, scale independence and the 3-point fallback when a display reserves no menu region.
+
+Physical external-display reconnects, cross-display synchronization, Stage Manager, light/dark menu
+readability, actual sleep/wake and the full supported-macOS matrix remain manual validation items.
+System grayscale intentionally desaturates this timer bar along with the rest of the desktop.
+
+The final automated pass includes typechecking, 383 TypeScript tests, 55 Swift tests, native bridge
+smoke, distribution, inference-preservation and grayscale GPU orientation checks. The development-
+signed Apple Silicon package passes strict deep signature verification.
+
+Installed-app checks confirmed the preference toggle, timer-bar-only presentation, and completion
+removing the on-screen panel and clearing the saved session. Quit removed every app panel. Relaunch
+preserved a paused remainder of exactly 8,194,766 ms, and a separate running restart preserved the
+exact session ID, deadline and total duration. The app's normal desktop panel was 1728×33 points at
+window level 25. In the app's own full-screen Space, WindowServer reported a 1728×3-point timer panel
+on screen; returning to the desktop restored the 33-point menu region. WindowServer membership does
+not establish visual ordering above every other app or prove per-display auto-hide behavior.
+
+The app is left with Show timer bar enabled, the original floating-bar preference restored, and a
+session ending at approximately the prior 6:38 PM target. The old build had no persisted clock, so
+that one development upgrade required restarting the session; subsequent restart checks used the
+new persisted clock without adjustment. The amber/card issue recorded earlier remains unresolved.

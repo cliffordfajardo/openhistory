@@ -94,8 +94,13 @@ Reminder timing:
 | Evidence freshness | a foreground observation older than 3 s is treated as unknown |
 | Idle | no reminders while macOS reports 120 s or more without input |
 
-Sessions live only in memory. Quitting or restarting the app ends the session; it never resumes on
-its own. Goals and the site list are saved.
+A session survives a quit or a crash. One record — its clock, its intention and a copy of the goal
+it started with — is saved in `focus.json`, and the next launch picks it up where it was: a paused
+session keeps exactly the time it had left, a running one keeps counting down the whole time the
+app was closed, and a session whose deadline passed in the meantime is dropped quietly, with no
+catch-up reminder. Nothing about what was on screen is saved, so a reminder always waits for fresh
+foreground evidence after a restart. **Stop**/**Complete** forgets the record, and so does **Delete
+all local data**; only quitting keeps it.
 
 ## While a session runs
 
@@ -162,6 +167,35 @@ be shortened to as little as 1 minute; starting one still asks for at least 5.
 - The panel is only as large as the capsule — there is no invisible full-screen hit area — and it
   is excluded from the grayscale capture filter, so it is never drawn into the gray image. Clicks
   on it are excluded from click recording.
+
+### The timer bar
+
+Off until you turn it on, under **While a session runs** → **Show timer bar**. It is independent of
+where the session itself is shown: it can be on with the floating bar, with the menu bar alone, or
+with both.
+
+- A quiet green-to-teal strip at about 20% opacity across the **menu region** of **every** display,
+  full display width. It starts full and shrinks from the right as the time left runs out, so the
+  width you can see is the share of the session that is left.
+- The height is whatever that display reserves above its usable area
+  (`frame.maxY - visibleFrame.maxY`), enlarged by its notch safe-area inset when necessary.
+  A display with no reserved menu region — or a hidden menu bar —
+  gets a 3-point strip on its top edge instead. Nothing is hardcoded to 22 points and nothing is
+  multiplied by a backing scale factor; the scale is used only for the layer's `contentsScale`.
+  macOS only reports menu-bar visibility globally, so the per-display answer is a best-effort
+  inference from that reserved region.
+- A display with a notch is handled by geometry alone: the strip spans the whole width and the
+  notch physically covers its middle.
+- The panels take no clicks and no keyboard at all. They are borderless, non-activating
+  `NSPanel`s at exactly `NSWindow.Level.statusBar` with `ignoresMouseEvents`, and they are shown
+  with `orderFrontRegardless`, so nothing they do ever activates the app or steals typing focus.
+  Because clicks pass through, none of them needs to be excluded from click recording; like the
+  other Focus panels, they are excluded from the grayscale capture filter.
+- Reduce Motion replaces the smooth shrink with an exact step on each existing once-a-second
+  update; there is no decorative animation. A paused session freezes the bar where it is, and a
+  hidden one animates nothing at all.
+- Turning the preference off removes every panel and observer. While it is on but no session is
+  running, the panels are kept and simply ordered out, so the next session does not rebuild them.
 
 ### The menu-bar icon
 
@@ -406,15 +440,18 @@ CollectorService (Node): validate + privacy ──► FocusController ◄── 
                                                    │   ▲ (nudge + session IDs)
                                                    ▼   │ pause / resume / complete / edit / moved
                                       FocusBar.swift: floating session bar (session ID)
+FocusController ── enabled + session clock ──► TimerBar.swift: passive strip per display
 ```
 
 Data shapes (`src/shared/focus.ts`):
 
 - `Goal { id, title, why, currentFocus }`,
   `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" |
-  "grayscale_screen" | "grayscale_system", amberEdge, barPresentation: "floating" | "menuBar" }`.
+  "grayscale_screen" | "grayscale_system", amberEdge, barPresentation: "floating" | "menuBar",
+  showTimerBar }`.
   `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, a missing
-  `amberEdge` as `true` only for the amber style, and a missing `barPresentation` as `"floating"`,
+  `amberEdge` as `true` only for the amber style, a missing `showTimerBar` as `false` (the same as
+  a new install), and a missing `barPresentation` as `"floating"`,
   so existing files get the bar exactly as a new install does. `focus.json` also holds
   `barPosition: { x, y } | null`, the bar's saved bottom-left corner in global AppKit points, and
   `barWidth`, its saved width in points (default 460, between 360 and 20 000; a missing one reads
@@ -435,7 +472,7 @@ Data shapes (`src/shared/focus.ts`):
   the latest reminder or preview. Native effect reports carry the nudge ID and are ignored unless
   that reminder is still visible.
 - `FocusSession` is `idle` or `active { id, goal snapshot, intention, domains, startedAt, endsAt,
-  totalMs, pausedRemainingMs, snoozedUntil }`, kept in memory only. `endsAt` is null exactly while
+  totalMs, pausedRemainingMs, snoozedUntil }`. `endsAt` is null exactly while
   the session is paused, and `pausedRemainingMs` then holds the frozen countdown. `totalMs` is the
   planned length including edits, so progress is never derived from `endsAt - startedAt` after a
   pause or an edit moved the deadline. Internally the reducer keeps
@@ -452,6 +489,23 @@ Data shapes (`src/shared/focus.ts`):
   asks the app to open its editor. `resized` carries the whole geometry and is validated at the
   TypeScript boundary (the same coordinate bounds as `moved`, plus the 360–20 000 width bounds)
   before it is written, so a nonsense or stale resize is ignored rather than saved.
+- The timer bar receives a typed, one-way request
+  `{ enabled, session: null | { endsAtEpochSeconds | null, pausedRemainingSeconds | null,
+  totalSeconds } }` through `updateTimerBar`, and is torn down with `shutdownTimerBar`. It carries
+  no goal, no intention and nothing about the browser, and it sends nothing back. Exactly one of
+  the two clocks is set, and both are bounds-checked on each side. `FocusController.syncTimerBar`
+  runs from the existing `publish()` — including the existing 1 Hz tick, and while paused — so the
+  native side re-reads its displays and resamples the same anchored deadline every second without
+  any new timer or interval on either side. Requests with no session are de-duplicated. The native
+  side keeps no clock and never decides that a session ended: it can stop drawing a spent one, but
+  the TypeScript reducer remains the only authority on expiry.
+- The saved session is `focus.json`'s `session: null | { id, goal snapshot, intention, startedAt,
+  endsAt | null, totalMs, pausedRemainingMs | null, snoozedUntil }`, validated strictly and on its
+  own: a malformed record is dropped without quarantining the goals and preferences around it. It
+  is written only when that projection really changes, so a session that is simply counting down
+  never touches the disk. Restoring rebuilds the same authoritative clock — remaining time from the
+  deadline or the frozen remainder, `accumulatedMs = totalMs − remaining`, `runningSince` = now or
+  null — takes a fresh observation generation, and asks for a new observation only when running.
 - Foreground evidence is `browser { generation, sequence, observedAt, processIdentifier,
   bundleIdentifier, domain }` or `unknown { generation, sequence, observedAt, reason }`.
 
@@ -517,6 +571,36 @@ Floating bar (`native/bridge/FocusBar.swift`, same dylib):
   `FocusOverlayPanel`, and the collector's pointer exclusion covers the bar's frame while it is
   visible, so bar clicks are never recorded as clicks in the app underneath.
 
+`TimerBar.swift` is deliberately separate from all of the above: an isolated `@MainActor`
+`TimerBarController` that owns one `TimerBarPanel` per `CGDirectDisplayID` and nothing else.
+
+- The panel is borderless and non-activating, `isFloatingPanel` is set **before** the level so it
+  cannot reset it, and the level is exactly `NSWindow.Level.statusBar` — not a guessed offset from
+  it. `canBecomeKey` and `canBecomeMain` are overridden to false, `ignoresMouseEvents` is on and
+  `hidesOnDeactivate` is off; it is only ever shown with `orderFrontRegardless`.
+- Placement is pure and unit-tested in `ActivityCore/TimerBarPlacement.swift`, which takes one
+  display's `frame`, `visibleFrame`, `safeAreaInsets.top` and
+  backing scale and returns a rectangle in that display's points. It is re-sampled on the existing
+  once-a-second update and on screen-parameter, Space, wake, activation, appearance and
+  accessibility notifications, and only panels whose rectangle really changed are moved.
+- The fill is a `CAGradientLayer` masked by a left-anchored `CALayer`: one linear
+  `bounds.size.width` animation runs from the current remaining fraction to zero over the seconds
+  the anchored deadline says are left, so repeating the same clock never restarts it. Only a new
+  clock, a moved panel, an appearance change or more than 6 points of visible drift resyncs it.
+  Reduce Motion replaces the animation with an exact step per update, and a paused session is not
+  redrawn at all.
+- `FocusGrayscale.swift` excludes `TimerBarPanel` from the capture filter too, including in the
+  fixture shims, so grayscale never recaptures the bar. Because the panels ignore mouse events,
+  they need no pointer-recording exclusion.
+
+Reference reading for the panel-over-the-menu-bar approach (architecture only — no code from any of
+them is copied into this repository, and their licences are untouched):
+[`NSWindow.Level`](https://developer.apple.com/documentation/appkit/nswindow/level),
+[`NSWindow.CollectionBehavior`](https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior),
+[`NSScreen.safeAreaInsets`](https://developer.apple.com/documentation/appkit/nsscreen/safeareainsets)
+and [Ice’s overlay panel](https://github.com/jordanbaird/Ice/blob/main/Ice/MenuBar/Appearance/MenuBarOverlayPanel.swift), a menu-bar manager that solves the same
+window-level and per-display placement problems.
+
 Build: `native/bridge/build.sh` uses SwiftPM's `native` build system (Swift 6.4 defaults to a
 different output layout) and links **every** `ActivityCore` object, failing if the count doesn't
 match the sources. Override with `OPENHISTORY_SWIFT_BUILD_SYSTEM` only if the layout matches.
@@ -538,7 +622,10 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   any window is created. For the floating bar it checks that every export exists and that malformed
   snapshots (bad JSON, no session, both running and paused, no length, an impossible position) are
   rejected; it deliberately never sends a valid snapshot or calls `focusFocusBar`, so no panel is
-  put on screen and no focus is taken. Only event kinds and reasons are printed.
+  put on screen and no focus is taken. For the timer bar it checks the same way that `updateTimerBar`
+  and `shutdownTimerBar` exist and that malformed requests (bad JSON, no preference, two clocks at
+  once, no length) are rejected, again without ever drawing one. Only event kinds and reasons are
+  printed.
 - `sample-app-resources.sh` reads `ps` statistics only. Run it idle and during a session.
 - `npm run test:grayscale-gpu` renders synthetic pixels through the production GPU renderer and
   checks grayscale and orientation. Window geometry (Retina crops, negative display origins,
@@ -569,6 +656,26 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   Choose **Focus Floating Bar** from the menu-bar icon and Tab through the controls, then press
   Escape. With a listed site in front, confirm the reminder still appears and that Window/Screen
   grayscale never contains the bar itself.
+- Manual checks for the timer bar (packaged app): turn **Show timer bar** on during a session and
+  confirm a full-width green strip covers the menu region of **every** display, that it shrinks
+  steadily from the right, and that the menu bar underneath stays readable. Click the menus,
+  the clock and a menu-bar extra through the strip: every click must reach what is underneath, and
+  the app must never come forward. Pause and confirm the strip freezes; resume and confirm it picks
+  up from there. Turn Reduce Motion on and confirm it steps once a second instead of gliding.
+  Plug and unplug a display, move between Spaces, sleep and wake the Mac: the strip should be
+  re-measured per display and never left at the wrong size. Turn the preference off and confirm
+  every strip disappears. Compare a notched display (the notch covers the middle) with an external
+  one. Confirm Window and Screen grayscale never contain the strip itself. Its behaviour over
+  full-screen apps and in Stage Manager is exactly what this check is for — it is not assumed.
+- `npm run fixture:timer-bar` builds a small app around the production panels, placement helper and
+  C entry point. It prints one ok/FAIL line per presentation check (linear shrink, frozen pause,
+  Reduce Motion stepping from the heartbeat alone, the same fraction on every panel, the
+  click-through and keyboard flags, the level and placement, and cleanup) and exits non-zero if any
+  failed. It needs no permissions and takes no focus.
+- Manual check for continuity: start a session, quit the app, wait a minute and reopen it — the
+  session, the bar, the timer bar and the menu-bar icon should come back with the closed minute
+  already counted. Repeat while paused: the remaining time should be untouched. Quit with less than
+  a minute left, wait it out and reopen: no session, no reminder, nothing left in `focus.json`.
 - Manual check for the menu bar in Dock presentation: start a session and confirm a temporary icon
   with the countdown appears, that its menu offers every session control, and that it disappears
   when the session completes while the app stays in the Dock.
@@ -577,6 +684,11 @@ Automated coverage includes domain anti-spoofing, malformed IPC and persistence,
 pause and resume across a passed deadline, editing a running session, malformed and stale bar
 actions, the bar preference migration and position and width validation, menu-bar presence
 mapping, floating-bar placement clamping, resize and fit geometry,
+the timer bar's request mapping and its feature detection separately from the floating bar,
+timer-bar placement across notches, backing scales, hidden menu bars and multiple displays,
+saved-session validation, running and paused restore, a session that expired while the app was
+closed, a clean stop clearing the record against a quit keeping it, evidence from before a restart
+being rejected, and the countdown not rewriting the file each second,
 snooze, dismiss, cooldown, re-entry, stale and out-of-order evidence, stale native actions,
 unknown evidence, stop, pause and restart, day reads well beyond 250 events, midnight privacy,
 gap labels, truncation limits, path traversal and symlinked files.
@@ -614,13 +726,20 @@ gap labels, truncation limits, path traversal and symlinked files.
   every display. A crash or force quit while it is on leaves the screen gray until the next
   launch restores the journal. Changing the amber edge replaces a visible reminder, which briefly
   restarts captured grayscale.
-- The floating bar has not been verified live yet. Its window is only as large as the capsule, but
+- The floating bar has been checked in the installed app. Its window is only as large as the capsule, but
   whether the area just outside its rounded corners passes clicks through to the app underneath is
   not claimed without runtime evidence: an `NSView` returning nil from `hitTest` does not by itself
   guarantee window-level click-through. Full-screen apps, several Spaces, mixed-resolution displays
   and physical keyboard delivery into the bar need manual verification per macOS version.
-- A session never resumes after a restart, so the bar and the temporary menu-bar icon do not come
-  back on their own either; the saved bar position and width do.
+- A session now resumes after a restart, and the bar, the timer bar and the temporary menu-bar icon
+  come back with it. Running and paused restoration were checked in the installed app. Physical
+  sleep/wake and system-clock changes have not been exercised live; their clock behavior has unit coverage.
+- A native presentation fixture verifies timer-bar motion and passive panel flags on macOS 26.6.2.
+  `canJoinAllSpaces`, `canJoinAllApplications` and
+  `fullScreenAuxiliary` are set, but that is **not** a claim that it stays visible over every
+  full-screen app, in Stage Manager, or on any particular macOS version or display combination —
+  those need manual verification. macOS reports menu-bar visibility only globally, so a display
+  whose menu bar is hidden on its own may still be measured from the global answer.
 - Both edge drags, Fit Display Width, Reset Width and saved-width restoration were checked in the
   installed app on macOS 26.6.2. The production animation also passed a native presentation-layer
   fixture. Other macOS versions and physical multi-display transitions still need testing. A fill

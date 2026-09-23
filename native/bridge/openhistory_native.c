@@ -34,6 +34,8 @@ extern void openhistory_focus_bar_set_action_callback(
     void *context
 );
 extern void openhistory_focus_bar_shutdown(void);
+extern int32_t openhistory_timer_bar_update(const char *request_json);
+extern void openhistory_timer_bar_shutdown(void);
 
 static napi_threadsafe_function collector_events = NULL;
 static napi_threadsafe_function focus_actions = NULL;
@@ -242,6 +244,7 @@ static void cleanup_native_bridge(void *argument) {
     openhistory_focus_overlay_set_action_callback(NULL, NULL);
     openhistory_focus_bar_set_action_callback(NULL, NULL);
     openhistory_focus_bar_shutdown();
+    openhistory_timer_bar_shutdown();
     openhistory_focus_overlay_shutdown();
     openhistory_collector_stop();
     focus_bar_actions = NULL;
@@ -389,6 +392,29 @@ static napi_value hide_focus_bar(napi_env env, napi_callback_info info) {
 static napi_value focus_focus_bar(napi_env env, napi_callback_info info) {
     (void)info;
     openhistory_focus_bar_focus();
+    return undefined_value(env);
+}
+
+static napi_value update_timer_bar(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    if (argument_count != 1) {
+        napi_throw_type_error(env, NULL, "updateTimerBar requires request JSON");
+        return NULL;
+    }
+    char *request_json = copy_utf8_argument(env, argument, "updateTimerBar request must be JSON text");
+    if (request_json == NULL) return NULL;
+    int32_t result = openhistory_timer_bar_update(request_json);
+    free(request_json);
+    napi_value value;
+    if (napi_create_int32(env, result, &value) != napi_ok) return NULL;
+    return value;
+}
+
+static napi_value shutdown_timer_bar(napi_env env, napi_callback_info info) {
+    (void)info;
+    openhistory_timer_bar_shutdown();
     return undefined_value(env);
 }
 
@@ -601,6 +627,8 @@ NAPI_MODULE_INIT() {
         { "updateFocusBar", NULL, update_focus_bar, NULL, NULL, NULL, napi_default, NULL },
         { "hideFocusBar", NULL, hide_focus_bar, NULL, NULL, NULL, napi_default, NULL },
         { "focusFocusBar", NULL, focus_focus_bar, NULL, NULL, NULL, napi_default, NULL },
+        { "updateTimerBar", NULL, update_timer_bar, NULL, NULL, NULL, napi_default, NULL },
+        { "shutdownTimerBar", NULL, shutdown_timer_bar, NULL, NULL, NULL, napi_default, NULL },
         { "isTrusted", NULL, is_trusted, NULL, NULL, NULL, napi_default, NULL },
         { "requestTrust", NULL, request_trust, NULL, NULL, NULL, napi_default, NULL },
         { "screenCaptureAccess", NULL, screen_capture_access, NULL, NULL, NULL, napi_default, NULL },

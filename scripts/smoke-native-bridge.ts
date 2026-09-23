@@ -17,6 +17,8 @@ interface NativeBridge {
   hideFocusBar(): void;
   focusFocusBar(): void;
   setFocusBarActionHandler(handler: ((line: string) => void) | null): void;
+  updateTimerBar(requestJSON: string): number;
+  shutdownTimerBar(): void;
   screenCaptureAccess(): boolean;
   requestScreenCaptureAccess(): boolean;
   systemColorFilterRead(): { enabled: boolean; type: number } | null;
@@ -35,6 +37,7 @@ try {
     "startCollector", "stopCollector", "setForegroundObservation",
     "showFocusOverlay", "hideFocusOverlay", "setFocusOverlayActionHandler",
     "updateFocusBar", "hideFocusBar", "focusFocusBar", "setFocusBarActionHandler",
+    "updateTimerBar", "shutdownTimerBar",
     "screenCaptureAccess", "requestScreenCaptureAccess", "systemColorFilterRead", "systemColorFilterWrite"
   ] as const) {
     assert.equal(typeof bridge[name], "function", `bridge is missing ${name}`);
@@ -131,6 +134,26 @@ try {
   bridge.hideFocusBar();
   bridge.setFocusBarActionHandler(() => undefined);
   bridge.setFocusBarActionHandler(null);
+
+  const timerSession = {
+    endsAtEpochSeconds: Math.round(Date.now() / 1_000) + 600,
+    pausedRemainingSeconds: null,
+    totalSeconds: 600
+  };
+  assert.throws(() => bridge.updateTimerBar(42 as unknown as string), TypeError);
+  assert.equal(bridge.updateTimerBar("{not json"), 1, "a malformed timer bar request must be rejected");
+  assert.equal(bridge.updateTimerBar("{}"), 1, "a request without the preference must be rejected");
+  assert.equal(bridge.updateTimerBar(JSON.stringify({
+    enabled: true,
+    session: { ...timerSession, pausedRemainingSeconds: 600 }
+  })), 1, "a request that is both running and paused must be rejected");
+  assert.equal(bridge.updateTimerBar(JSON.stringify({
+    enabled: true,
+    session: { ...timerSession, totalSeconds: 0 }
+  })), 1, "a session without a length must be rejected");
+  assert.equal(bridge.updateTimerBar(JSON.stringify({ enabled: false, session: null })), 0,
+    "switching the timer bar off must be applied");
+  bridge.shutdownTimerBar();
 
   const started = bridge.startCollector(dataDirectory, JSON.stringify({
     captureWindowTitles: false,

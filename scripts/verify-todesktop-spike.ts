@@ -74,6 +74,8 @@ expect(bridgeBuildSource.includes("native/bridge/FocusGrayscale.swift") &&
   bridgeBuildSource.includes("-framework ScreenCaptureKit"), "native bridge must compile and link the grayscale reminder");
 expect(bridgeBuildSource.includes("native/bridge/FocusWindowGrayscale.swift"),
   "native bridge must compile the window-only grayscale reminder");
+expect(bridgeBuildSource.includes("native/bridge/TimerBar.swift"),
+  "native bridge must compile the persistent timer bar");
 expect(/\bscreen\b/i.test(config.mac?.extendInfo?.NSScreenCaptureUsageDescription ?? ""),
   "ToDesktop Info.plist must explain Screen Recording use");
 expect(localPackagerSource.includes("extendInfo: toDesktopConfig.mac.extendInfo"),
