@@ -68,6 +68,22 @@ export interface FocusBarPosition {
   y: number;
 }
 
+/**
+ * How wide the floating bar is, in points. The height is fixed. The maximum is generous rather
+ * than a real display width: a bar wider than its display is trimmed to fit when it is placed.
+ */
+export const FOCUS_BAR_WIDTH = {
+  default: 460,
+  minimum: 360,
+  maximum: 20_000
+} as const;
+
+/** Where the floating bar sits and how wide it is, as saved between sessions. */
+export interface FocusBarGeometry {
+  position: FocusBarPosition | null;
+  width: number;
+}
+
 export interface FocusPreferences {
   domains: string[];
   durationMinutes: number;

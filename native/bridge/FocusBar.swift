@@ -1,6 +1,7 @@
 import ActivityCore
 import AppKit
 import Foundation
+import QuartzCore
 
 struct FocusBarSnapshot: Decodable {
     let sessionId: String
@@ -11,6 +12,8 @@ struct FocusBarSnapshot: Decodable {
     let totalSeconds: Double
     let snoozed: Bool
     let position: Position?
+    /// Saved width; absent from bridges written before the bar could be resized.
+    let width: Double?
 
     struct Position: Decodable {
         let x: Double
@@ -19,6 +22,11 @@ struct FocusBarSnapshot: Decodable {
 
     var paused: Bool { endsAtEpochSeconds == nil }
 
+    var barWidth: CGFloat {
+        let requested = CGFloat(width ?? Double(FocusBarPlacement.defaultWidth))
+        return min(max(requested, FocusBarPlacement.minimumWidth), FocusBarPlacement.maximumWidth)
+    }
+
     var isValid: Bool {
         !sessionId.isEmpty && sessionId.count <= 100 &&
             goalTitle.count <= 300 && intention.count <= 600 &&
@@ -26,7 +34,11 @@ struct FocusBarSnapshot: Decodable {
             (endsAtEpochSeconds == nil) != (pausedRemainingSeconds == nil) &&
             (endsAtEpochSeconds.map { $0 > 0 && $0.isFinite } ?? true) &&
             (pausedRemainingSeconds.map { $0 >= 0 && $0 <= 86_400 } ?? true) &&
-            (position.map { $0.x.isFinite && $0.y.isFinite && abs($0.x) <= 200_000 && abs($0.y) <= 200_000 } ?? true)
+            (position.map { $0.x.isFinite && $0.y.isFinite && abs($0.x) <= 200_000 && abs($0.y) <= 200_000 } ?? true) &&
+            (width.map {
+                $0.isFinite && $0 >= Double(FocusBarPlacement.minimumWidth) &&
+                    $0 <= Double(FocusBarPlacement.maximumWidth)
+            } ?? true)
     }
 }
 
@@ -38,13 +50,19 @@ enum FocusBarResult: Int32 {
 }
 
 private enum FocusBarStyle {
-    static let size = NSSize(width: 460, height: 54)
+    static let height: CGFloat = 54
+    static let defaultSize = NSSize(width: FocusBarPlacement.defaultWidth, height: height)
     static let cornerRadius: CGFloat = 14
     static let padding: CGFloat = 14
     static let controlSize: CGFloat = 28
     static let controlGap: CGFloat = 4
     static let countdownWidth: CGFloat = 66
     static let revealDuration: TimeInterval = 0.12
+    /// How far in from a vertical edge a press starts a resize instead of a move.
+    static let resizeEdge: CGFloat = 8
+    static let gripSize = NSSize(width: 2, height: 16)
+    /// How far the fill may sit from the anchored clock before it is corrected, in points.
+    static let progressDrift: CGFloat = 4
     static let running = CGColor(srgbRed: 0.36, green: 0.62, blue: 0.45, alpha: 1)
     static let paused = CGColor(srgbRed: 0.62, green: 0.58, blue: 0.44, alpha: 1)
 }
@@ -79,7 +97,7 @@ final class FocusBarPanel: NSPanel {
 
     convenience init() {
         self.init(
-            contentRect: NSRect(origin: .zero, size: FocusBarStyle.size),
+            contentRect: NSRect(origin: .zero, size: FocusBarStyle.defaultSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: true
@@ -97,6 +115,8 @@ final class FocusBarPanel: NSPanel {
         isExcludedFromWindowsMenu = true
         isMovableByWindowBackground = false
         animationBehavior = .none
+        // The resize cursor and the edge grip follow the pointer, which needs moved events.
+        acceptsMouseMovedEvents = true
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -254,6 +274,11 @@ final class FocusBarContentView: NSView {
     private let solid = FocusBarDecoration()
     private let dot = FocusBarDecoration()
     private let progress = FocusBarDecoration()
+    private let fill = CALayer()
+    private let leadingGrip = FocusBarDecoration()
+    private let trailingGrip = FocusBarDecoration()
+    private var hoveredEdge: FocusBarPlacement.HorizontalEdge?
+    private var activeResize: (edge: FocusBarPlacement.HorizontalEdge, startX: CGFloat)?
     private let goalLabel = FocusBarLabel(labelWithString: "")
     private let countdownLabel = FocusBarLabel(labelWithString: "")
     let primaryButton: FocusBarButton
@@ -275,7 +300,7 @@ final class FocusBarContentView: NSView {
         primaryButton = FocusBarButton(glyph: .pause, label: "Pause focus session", action: onPrimary)
         completeButton = FocusBarButton(glyph: .complete, label: "Complete focus session", action: onComplete)
         overflowButton = FocusBarButton(glyph: .more, label: "More focus session options", action: onOverflow)
-        super.init(frame: NSRect(origin: .zero, size: FocusBarStyle.size))
+        super.init(frame: NSRect(origin: .zero, size: FocusBarStyle.defaultSize))
         wantsLayer = true
         layer?.cornerRadius = FocusBarStyle.cornerRadius
         layer?.masksToBounds = true
@@ -298,9 +323,29 @@ final class FocusBarContentView: NSView {
         addSubview(dot)
 
         progress.wantsLayer = true
-        progress.layer?.backgroundColor = FocusBarStyle.running.copy(alpha: 0.24)
+        progress.autoresizingMask = [.width, .height]
+        progress.layer?.masksToBounds = true
         progress.setAccessibilityElement(false)
+        fill.anchorPoint = .zero
+        fill.position = .zero
+        fill.backgroundColor = FocusBarStyle.running.copy(alpha: 0.24)
+        // Only the explicit fill animation moves this layer; implicit ones would fight it.
+        fill.actions = [
+            "bounds": NSNull(),
+            "position": NSNull(),
+            "backgroundColor": NSNull()
+        ] as [String: any CAAction]
+        progress.layer?.addSublayer(fill)
         addSubview(progress)
+
+        for grip in [leadingGrip, trailingGrip] {
+            grip.wantsLayer = true
+            grip.layer?.cornerRadius = FocusBarStyle.gripSize.width / 2
+            grip.layer?.backgroundColor = CGColor(gray: 1, alpha: 0.45)
+            grip.isHidden = true
+            grip.setAccessibilityElement(false)
+            addSubview(grip)
+        }
 
         goalLabel.textColor = NSColor.white.withAlphaComponent(0.94)
         goalLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
@@ -327,11 +372,34 @@ final class FocusBarContentView: NSView {
 
     required init?(coder: NSCoder) { nil }
 
+    /**
+     A press near a vertical edge resizes; anywhere else drags the whole bar. The panel is
+     borderless, so the edges are handled here rather than by AppKit's own resize corners.
+     `performDrag(with:)` runs the move to its end, so the drag handlers below only ever see a
+     resize.
+     */
     override func mouseDown(with event: NSEvent) {
+        if let window, let edge = resizeEdge(at: convert(event.locationInWindow, from: nil)) {
+            activeResize = (edge: edge, startX: window.convertPoint(toScreen: event.locationInWindow).x)
+            MainActor.assumeIsolated { FocusBarController.shared.beginResize() }
+            return
+        }
         let before = window?.frame
         window?.performDrag(with: event)
         guard let before, window?.frame != before else { return }
         MainActor.assumeIsolated { FocusBarController.shared.dragFinished() }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let resize = activeResize, let window else { return }
+        let deltaX = window.convertPoint(toScreen: event.locationInWindow).x - resize.startX
+        MainActor.assumeIsolated { FocusBarController.shared.resize(edge: resize.edge, deltaX: deltaX) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard activeResize != nil else { return }
+        activeResize = nil
+        MainActor.assumeIsolated { FocusBarController.shared.finishResize() }
     }
 
     override func updateTrackingAreas() {
@@ -339,7 +407,7 @@ final class FocusBarContentView: NSView {
         if let trackingArea { removeTrackingArea(trackingArea) }
         let area = NSTrackingArea(
             rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: [.mouseEnteredAndExited, .mouseMoved, .cursorUpdate, .activeAlways, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -347,11 +415,47 @@ final class FocusBarContentView: NSView {
         trackingArea = area
     }
 
-    override func mouseEntered(with event: NSEvent) { setRevealed(true) }
+    override func mouseEntered(with event: NSEvent) {
+        setRevealed(true)
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if hoveredEdge == nil {
+            super.cursorUpdate(with: event)
+            return
+        }
+        NSCursor.resizeLeftRight.set()
+    }
 
     override func mouseExited(with event: NSEvent) {
+        updateHover(at: nil)
         guard window?.isKeyWindow != true else { return }
         setRevealed(false)
+    }
+
+    private func resizeEdge(at point: NSPoint) -> FocusBarPlacement.HorizontalEdge? {
+        guard bounds.contains(point) else { return nil }
+        if point.x <= bounds.minX + FocusBarStyle.resizeEdge { return .leading }
+        if point.x >= bounds.maxX - FocusBarStyle.resizeEdge { return .trailing }
+        return nil
+    }
+
+    private func updateHover(at point: NSPoint?) {
+        let edge = activeResize?.edge ?? point.flatMap { resizeEdge(at: $0) }
+        if edge != nil {
+            NSCursor.resizeLeftRight.set()
+        } else if hoveredEdge != nil {
+            NSCursor.arrow.set()
+        }
+        guard edge != hoveredEdge else { return }
+        hoveredEdge = edge
+        leadingGrip.isHidden = edge != .leading
+        trailingGrip.isHidden = edge != .trailing
     }
 
     func setRevealed(_ visible: Bool) {
@@ -405,12 +509,55 @@ final class FocusBarContentView: NSView {
         primaryButton.setAccessibilityLabel(snapshot.paused ? "Resume focus session" : "Pause focus session")
         primaryButton.toolTip = snapshot.paused ? "Resume focus session" : "Pause focus session"
         dot.layer?.backgroundColor = snapshot.paused ? FocusBarStyle.paused : FocusBarStyle.running
-        progress.layer?.backgroundColor = (snapshot.paused ? FocusBarStyle.paused : FocusBarStyle.running)
+        fill.backgroundColor = (snapshot.paused ? FocusBarStyle.paused : FocusBarStyle.running)
             .copy(alpha: 0.24)
         needsLayout = true
     }
 
-    func paint(remainingSeconds: Double, totalSeconds: Double, paused: Bool, snoozed: Bool) {
+    /**
+     Grows the elapsed fill to the end of the bar over `animateOverSeconds`, the time the anchored
+     deadline says is left. One linear animation covers the whole remaining session, so the
+     ordinary countdown ticks leave the animation running. A paused session,
+     an expired one and Reduce Motion get the exact value with no animation at all.
+     */
+    func setProgress(fraction: Double, animateOverSeconds: Double?) {
+        let full = max(1, bounds.width)
+        let elapsed = full * CGFloat(max(0, min(1, fraction)))
+        fill.removeAnimation(forKey: "fill")
+        guard let seconds = animateOverSeconds, seconds > 0, !appearanceOptions.reduceMotion else {
+            setFillWidth(elapsed)
+            return
+        }
+        setFillWidth(full)
+        let growth = CABasicAnimation(keyPath: "bounds.size.width")
+        growth.fromValue = elapsed
+        growth.toValue = full
+        growth.duration = seconds
+        growth.timingFunction = CAMediaTimingFunction(name: .linear)
+        fill.add(growth, forKey: "fill")
+    }
+
+    /// Leaves the fill where it is drawn and stops animating it, for a hidden or torn-down bar.
+    func stopProgressAnimation() {
+        guard fill.animation(forKey: "fill") != nil else { return }
+        let drawn = (fill.presentation() ?? fill).bounds.width
+        fill.removeAnimation(forKey: "fill")
+        setFillWidth(drawn)
+    }
+
+    /// How wide the fill is on screen right now, for the once-a-second drift check.
+    var drawnProgressWidth: CGFloat { (fill.presentation() ?? fill).bounds.width }
+
+    var motionReduced: Bool { appearanceOptions.reduceMotion }
+
+    private func setFillWidth(_ width: CGFloat) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fill.bounds = CGRect(x: 0, y: 0, width: width, height: bounds.height)
+        CATransaction.commit()
+    }
+
+    func paint(remainingSeconds: Double, paused: Bool, snoozed: Bool) {
         countdownLabel.stringValue = focusBarCountdownText(remainingSeconds)
         let spoken = focusBarSpokenTime(remainingSeconds)
         countdownLabel.setAccessibilityLabel(paused ? "Paused, \(spoken)" : spoken)
@@ -418,14 +565,24 @@ final class FocusBarContentView: NSView {
         if paused { description += " Paused." }
         if snoozed { description += " Reminders snoozed." }
         setAccessibilityLabel(description)
-        let fraction = max(0, min(1, (totalSeconds - remainingSeconds) / max(1, totalSeconds)))
-        progress.frame = NSRect(x: 0, y: 0, width: bounds.width * fraction, height: bounds.height)
     }
 
     override func layout() {
         super.layout()
         blur.frame = bounds
         solid.frame = bounds
+        // The fill itself is never laid out here: only `setProgress` moves it, so a layout pass
+        // during a resize or a reveal cannot restart the running animation.
+        progress.frame = bounds
+        let grip = FocusBarStyle.gripSize
+        let gripY = bounds.midY - grip.height / 2
+        leadingGrip.frame = NSRect(x: bounds.minX + 4, y: gripY, width: grip.width, height: grip.height)
+        trailingGrip.frame = NSRect(
+            x: bounds.maxX - 4 - grip.width,
+            y: gripY,
+            width: grip.width,
+            height: grip.height
+        )
         let padding = FocusBarStyle.padding
         let control = FocusBarStyle.controlSize
         let gap = FocusBarStyle.controlGap
@@ -462,6 +619,7 @@ final class FocusBarController: NSObject {
     private var actionCallback: OpenHistoryFocusActionCallback?
     private var actionContext: UnsafeMutableRawPointer?
     private var barFrame: NSRect = .zero
+    private var resizeStartFrame: NSRect = .zero
     private var recentBarUntil = Date.distantPast
     private var menuTracking = false
     private var menuCaptureUntil = Date.distantPast
@@ -486,6 +644,7 @@ final class FocusBarController: NSObject {
             barFrame = frame
         }
         paint()
+        applyProgress()
         panel.orderFrontRegardless()
         syncPaintTimer()
         return .shown
@@ -495,7 +654,9 @@ final class FocusBarController: NSObject {
         stopPaintTimer()
         recentBarUntil = Date().addingTimeInterval(1)
         snapshot = nil
+        resizeStartFrame = .zero
         guard let panel else { return }
+        contentView?.stopProgressAnimation()
         contentView?.setRevealed(false)
         panel.orderOut(nil)
     }
@@ -547,6 +708,50 @@ final class FocusBarController: NSObject {
         send(["action": "moved", "sessionId": snapshot.sessionId, "x": barFrame.minX, "y": barFrame.minY])
     }
 
+    fileprivate func beginResize() {
+        guard let panel else { return }
+        resizeStartFrame = panel.frame
+    }
+
+    fileprivate func resize(edge: FocusBarPlacement.HorizontalEdge, deltaX: CGFloat) {
+        guard resizeStartFrame != .zero else { return }
+        guard let frame = FocusBarPlacement.resizedFrame(
+            current: resizeStartFrame,
+            edge: edge,
+            deltaX: deltaX,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
+        ) else { return }
+        applyFrame(frame)
+    }
+
+    fileprivate func finishResize() {
+        let started = resizeStartFrame
+        resizeStartFrame = .zero
+        guard started != .zero, let panel, panel.frame != started else { return }
+        reportGeometry()
+    }
+
+    @discardableResult
+    private func applyFrame(_ frame: NSRect) -> Bool {
+        guard let panel, let contentView, !frame.equalTo(panel.frame) else { return false }
+        panel.setFrame(frame, display: true)
+        contentView.frame = NSRect(origin: .zero, size: frame.size)
+        barFrame = frame
+        applyProgress()
+        return true
+    }
+
+    private func reportGeometry() {
+        guard let snapshot else { return }
+        send([
+            "action": "resized",
+            "sessionId": snapshot.sessionId,
+            "x": barFrame.minX,
+            "y": barFrame.minY,
+            "width": barFrame.width
+        ])
+    }
+
     private func report(_ action: String) {
         guard let snapshot else { return }
         send(["action": action, "sessionId": snapshot.sessionId])
@@ -562,6 +767,10 @@ final class FocusBarController: NSObject {
         guard let view = contentView?.overflowButton else { return }
         let menu = NSMenu()
         menu.addItem(withTitle: "Edit Session…", action: #selector(editSession), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Fit Display Width", action: #selector(fitDisplayWidth), keyEquivalent: "")
+        menu.addItem(withTitle: "Reset Width", action: #selector(resetWidth), keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Move to Menu Bar", action: #selector(moveToMenuBar), keyEquivalent: "")
         for item in menu.items { item.target = self }
         menuTracking = true
@@ -575,6 +784,27 @@ final class FocusBarController: NSObject {
     @objc private func editSession() { report("edit") }
 
     @objc private func moveToMenuBar() { report("move_to_menu_bar") }
+
+    @objc private func fitDisplayWidth() {
+        guard let panel else { return }
+        guard let frame = FocusBarPlacement.fitFrame(
+            current: panel.frame,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
+        ) else { return }
+        if applyFrame(frame) { reportGeometry() }
+    }
+
+    @objc private func resetWidth() {
+        guard let panel else { return }
+        let current = panel.frame
+        let size = NSSize(width: FocusBarPlacement.defaultWidth, height: current.height)
+        guard let frame = FocusBarPlacement.frame(
+            preferredOrigin: NSPoint(x: current.midX - size.width / 2, y: current.minY),
+            size: size,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
+        ) else { return }
+        if applyFrame(frame) { reportGeometry() }
+    }
 
     private func togglePause() {
         report(snapshot?.paused == true ? "resume" : "pause")
@@ -600,17 +830,18 @@ final class FocusBarController: NSObject {
     private func placement(for snapshot: FocusBarSnapshot) -> NSRect? {
         let visibleFrames = NSScreen.screens.map(\.visibleFrame)
         let preferred = snapshot.position.map { NSPoint(x: $0.x, y: $0.y) }
+        let size = NSSize(width: snapshot.barWidth, height: FocusBarStyle.height)
         if panel?.isVisible == true, barFrame != .zero,
            let kept = FocusBarPlacement.frame(
                preferredOrigin: barFrame.origin,
-               size: FocusBarStyle.size,
+               size: size,
                visibleFrames: visibleFrames
            ) {
             return kept
         }
         return FocusBarPlacement.frame(
             preferredOrigin: preferred,
-            size: FocusBarStyle.size,
+            size: size,
             visibleFrames: visibleFrames
         )
     }
@@ -627,9 +858,27 @@ final class FocusBarController: NSObject {
         guard let snapshot, let contentView else { return }
         contentView.paint(
             remainingSeconds: remainingSeconds(),
-            totalSeconds: snapshot.totalSeconds,
             paused: snapshot.paused,
             snoozed: snapshot.snoozed
+        )
+    }
+
+    private func elapsedFraction() -> Double {
+        guard let snapshot else { return 0 }
+        let total = max(1, snapshot.totalSeconds)
+        return max(0, min(1, (total - remainingSeconds()) / total))
+    }
+
+    /**
+     Hands the fill the fraction it is at and, while the clock runs, the seconds it has left to
+     reach the end. Session, appearance and width changes restart it; the paint tick also resyncs
+     under Reduce Motion or after clock drift.
+     */
+    private func applyProgress() {
+        guard let snapshot, let contentView else { return }
+        contentView.setProgress(
+            fraction: elapsedFraction(),
+            animateOverSeconds: snapshot.paused ? nil : remainingSeconds()
         )
     }
 
@@ -653,6 +902,24 @@ final class FocusBarController: NSObject {
             return
         }
         paint()
+        resyncProgressIfDrifted()
+    }
+
+    /**
+     Under Reduce Motion the fill is not animated at all, so the countdown's own tick steps it.
+     Otherwise sleep, or an animation the window server stopped advancing, can leave the fill
+     behind the anchored clock: only a visible gap is corrected, so an ordinary tick never restarts
+     the animation.
+     */
+    private func resyncProgressIfDrifted() {
+        guard let contentView else { return }
+        if contentView.motionReduced {
+            applyProgress()
+            return
+        }
+        let expected = contentView.bounds.width * CGFloat(elapsedFraction())
+        guard abs(expected - contentView.drawnProgressWidth) > FocusBarStyle.progressDrift else { return }
+        applyProgress()
     }
 
     private func stopPaintTimer() {
@@ -689,17 +956,20 @@ final class FocusBarController: NSObject {
         )
     }
 
+    /**
+     A display change only trims the bar onto what is left; the saved width is not rewritten, so a
+     bar can use its saved width again on a display large enough to hold it.
+     */
     @objc private func screenParametersChanged() {
-        guard let panel, panel.isVisible, let contentView else { return }
-        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        guard let panel, panel.isVisible else { return }
+        let size = snapshot.map { NSSize(width: $0.barWidth, height: FocusBarStyle.height) }
+            ?? barFrame.size
         guard let frame = FocusBarPlacement.frame(
             preferredOrigin: barFrame.origin,
-            size: FocusBarStyle.size,
-            visibleFrames: visibleFrames
+            size: size,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
         ) else { return }
-        panel.setFrame(frame, display: true)
-        contentView.frame = NSRect(origin: .zero, size: frame.size)
-        barFrame = frame
+        applyFrame(frame)
         paint()
     }
 
@@ -710,6 +980,7 @@ final class FocusBarController: NSObject {
 
     @objc private func accessibilityOptionsChanged() {
         contentView?.apply(FocusOverlayAppearance.current)
+        applyProgress()
     }
 }
 

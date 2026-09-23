@@ -955,6 +955,41 @@ test("bar actions complete, edit and move the session, and stale or malformed on
   assert.deepEqual(restarted.bar.snapshots.at(-1)?.position, { x: 121, y: 88 });
 });
 
+test("resizing the bar saves its width with its corner, and impossible or stale widths are dropped", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  assert.equal(f.bar.snapshots.at(-1)?.width, 460, "a bar that has never been resized is the compact one");
+
+  for (const line of [
+    JSON.stringify({ action: "resized", sessionId: "session-fixed", x: 0, y: 40 }),
+    JSON.stringify({ action: "resized", sessionId: "session-fixed", x: 0, y: 40, width: 10 }),
+    JSON.stringify({ action: "resized", sessionId: "session-fixed", x: 0, y: 40, width: 100_000 }),
+    JSON.stringify({ action: "resized", sessionId: "session-fixed", x: Number.MAX_VALUE, y: 40, width: 1_200 }),
+    JSON.stringify({ action: "resized", sessionId: "session-other", x: 0, y: 40, width: 1_200 })
+  ]) {
+    f.bar.handler!(line);
+  }
+  assert.equal(f.bar.snapshots.at(-1)?.width, 460, "a missing, impossible or stale resize changes nothing");
+  assert.equal(f.controller.view().barPosition, null, "and none of them moves the bar either");
+
+  f.bar.handler!(JSON.stringify({ action: "resized", sessionId: "session-fixed", x: 12.4, y: 40, width: 1_200.6 }));
+  assert.deepEqual(f.controller.view().barPosition, { x: 12, y: 40 }, "one resize saves the corner and the width");
+  assert.equal(f.bar.snapshots.at(-1)?.width, 1_201);
+
+  f.bar.handler!(JSON.stringify({ action: "moved", sessionId: "session-fixed", x: 30, y: 40 }));
+  assert.equal(f.bar.snapshots.at(-1)?.width, 1_201, "moving the bar afterwards keeps the width");
+
+  const restarted = await fixture(context, f.directory);
+  restarted.controller.start({
+    goalId: restarted.controller.view().goals[0]!.id,
+    intention: "",
+    durationMinutes: 25
+  });
+  assert.equal(restarted.bar.snapshots.at(-1)?.width, 1_201,
+    "the width is remembered for the next session, like the position");
+});
+
 test("a bar click that arrives after its session ended cannot affect the next one", async (context) => {
   const f = await fixture(context);
   const goalId = readyToStart(f);

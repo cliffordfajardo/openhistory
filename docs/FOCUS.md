@@ -129,27 +129,36 @@ be shortened to as little as 1 minute; starting one still asks for at least 5.
 
 ### The floating bar
 
-- About 460 × 54 points, dark, rounded, with a small muted green session indicator and a thin
-  progress fill. The goal truncates visually; VoiceOver reads the whole goal and intention.
-- Pause/resume, complete and the overflow menu (**Edit Session…**, **Move to Menu Bar**) appear on
-  hover **or** keyboard focus, in space that is reserved whether or not they are shown, so the bar
-  never resizes or jumps.
+- 54 points tall and 460 wide to start with, dark, rounded, with a small muted green session
+  indicator and a muted progress fill that grows smoothly from left to right as the session runs.
+  The goal truncates visually; VoiceOver reads the whole goal and intention.
+- **Resizing it**: drag either vertical edge sideways — the pointer turns into a resize cursor and
+  a thin grip appears on the edge under it. The bar keeps its height, has a 360-point minimum unless the display is narrower,
+  and never grows past the usable width of its display. Overflow → **Fit Display Width** stretches
+  it across that display, **Reset Width** puts it back to 460. The width is saved in `focus.json`
+  next to the position and is used for later sessions.
+- Pause/resume, complete and the overflow menu (**Edit Session…**, **Fit Display Width**,
+  **Reset Width**, **Move to Menu Bar**) appear on hover **or** keyboard focus, in space that is
+  reserved whether or not they are shown, so revealing them never changes the bar's size.
 - Showing the bar or ticking its countdown never activates the app and never makes the bar the key
   window: it is a nonactivating `NSPanel` shown with `orderFrontRegardless`. Clicking its buttons
   works without taking focus from the app you are in.
 - **Keyboard access** is explicit: choose **Focus Floating Bar** from the menu-bar icon or
   **Focus the bar** on the Focus page. That is the only path that activates the app and makes the
   bar key. Then Tab cycles pause → complete → overflow, Space or Return presses the focused
-  control, and Escape collapses the controls and gives the keyboard back to the previous app.
-- **Moving it**: drag anywhere on the capsule except the controls. The final position is saved in
-  `focus.json` and used for later sessions; it is clamped back onto a connected display when
-  displays change or a saved position no longer exists. The default is bottom centre, above the
-  Dock, and never the top, where the reminder card appears.
+  control, and Escape collapses the controls and deactivates the panel.
+- **Moving it**: drag anywhere on the capsule except the controls and the two resize edges. The
+  final position is saved in `focus.json` and used for later sessions; position and width are both
+  clamped back onto a connected display when displays change or a saved position no longer exists.
+  A display that is too small only trims the bar on screen; the saved width is kept, so the bar is
+  that wide again on a display that can hold it. The default is bottom centre, above the Dock, and
+  never the top, where the reminder card appears.
 - **Minimizing it** means moving the session to the menu bar: overflow → **Move to Menu Bar**, or
-  the preference under **While a session runs**. The session and its saved position are kept, and
-  **Show Floating Bar** brings it back.
-- Reduce Motion (no fade on reveal), Reduce Transparency (solid capsule) and Increase Contrast
-  (brighter border, opaque controls) are honored and update live.
+  the preference under **While a session runs**. The session, its saved position and its width are
+  kept, and **Show Floating Bar** brings it back.
+- Reduce Motion (no fade on reveal, and a progress fill that steps once a second instead of
+  growing), Reduce Transparency (solid capsule) and Increase Contrast (brighter border, opaque
+  controls) are honored and update live.
 - The panel is only as large as the capsule — there is no invisible full-screen hit area — and it
   is excluded from the grayscale capture filter, so it is never drawn into the gray image. Clicks
   on it are excluded from click recording.
@@ -407,8 +416,11 @@ Data shapes (`src/shared/focus.ts`):
   `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, a missing
   `amberEdge` as `true` only for the amber style, and a missing `barPresentation` as `"floating"`,
   so existing files get the bar exactly as a new install does. `focus.json` also holds
-  `barPosition: { x, y } | null`, the bar's saved bottom-left corner in global AppKit points; it
-  lives in the activity-data folder, so "Delete all local data" removes it with everything else.
+  `barPosition: { x, y } | null`, the bar's saved bottom-left corner in global AppKit points, and
+  `barWidth`, its saved width in points (default 460, between 360 and 20 000; a missing one reads
+  as 460, so files written before resizing keep the compact bar). A resize writes both in one
+  file write. They live in the activity-data folder, so "Delete all local data" removes them with
+  everything else and the bar comes back at its default size and place.
 - Every reminder request carries `amberEdge`. For `grayscale_system` the native overlay captures
   nothing; `SystemColorFilterController` (`src/main/system-color-filter.ts`) is the single,
   synchronous owner of `SystemColorFilterSettings { enabled, type }` through the native
@@ -431,12 +443,15 @@ Data shapes (`src/shared/focus.ts`):
   between ticks so the state is not re-sent, and the app not re-rendered, once a second.
 - The floating bar receives a typed snapshot
   `{ sessionId, goalTitle, intention, endsAtEpochSeconds | null, pausedRemainingSeconds | null,
-  totalSeconds, snoozed, position }` through `updateFocusBar`, and reports
-  `{ action: "pause" | "resume" | "complete" | "edit" | "move_to_menu_bar" | "moved", sessionId, x?, y? }`.
-  The deadline is an anchor: the native side runs a 1 Hz **paint-only** timer against it (invalidated
-  when the bar hides, pauses or shuts down) while the TypeScript reducer stays the only authority on
-  expiry. Actions naming a session that is no longer running are dropped, so a click that arrives
-  late can never act on a newer session. `edit` only asks the app to open its editor.
+  totalSeconds, snoozed, position, width }` through `updateFocusBar`, and reports
+  `{ action: "pause" | "resume" | "complete" | "edit" | "move_to_menu_bar" | "moved" | "resized",
+  sessionId, x?, y?, width? }`. The deadline is an anchor: the native side runs a 1 Hz
+  **paint-only** timer against it (invalidated when the bar hides, pauses or shuts down) while the
+  TypeScript reducer stays the only authority on expiry. Actions naming a session that is no longer
+  running are dropped, so a click that arrives late can never act on a newer session. `edit` only
+  asks the app to open its editor. `resized` carries the whole geometry and is validated at the
+  TypeScript boundary (the same coordinate bounds as `moved`, plus the 360–20 000 width bounds)
+  before it is written, so a nonsense or stale resize is ignored rather than saved.
 - Foreground evidence is `browser { generation, sequence, observedAt, processIdentifier,
   bundleIdentifier, domain }` or `unknown { generation, sequence, observedAt, reason }`.
 
@@ -482,9 +497,22 @@ Floating bar (`native/bridge/FocusBar.swift`, same dylib):
   an explicit **Focus Floating Bar** / **Focus the bar** request.
 - Dragging uses the window server's own drag (`performDrag(with:)`) from the capsule background;
   the controls keep their clicks. A position is only reported when the frame actually changed.
+- Resizing is handled in the content view rather than by AppKit's resizable edges, which a
+  borderless nonactivating panel does not reliably expose for this design: a press within 8 points of a vertical edge starts
+  a drag that only sets the panel's frame, and the new geometry is reported once, on mouse up. A
+  tracking area with `.mouseMoved` and `.cursorUpdate` (`.activeAlways`) drives the resize cursor
+  and the edge grip without the app being active.
+- The progress fill is a `CALayer` inside the capsule, not a laid-out `NSView`: one linear
+  `bounds.size.width` animation runs from the current fraction to the full width over the seconds
+  the anchored deadline says are left, so ordinary countdown ticks and layout
+  passes leave it running. It is recomputed on a pause, resume, edit, resize or appearance change,
+  removed when the bar hides, and set exactly (no animation) while paused or under Reduce Motion.
+  The countdown tick only corrects the fill when it has drifted more than 4 points from the clock,
+  which is what a sleep leaves behind.
 - Geometry is pure and unit-tested in `ActivityCore/FocusBarPlacement.swift`: the saved corner is
-  pulled fully inside whichever `visibleFrame` holds most of it, and a corner on no connected
-  display falls back to bottom centre above the Dock.
+  pulled fully inside whichever `visibleFrame` holds most of it, a corner on no connected display
+  falls back to bottom centre above the Dock, and both the default position and every resize trim
+  the width to the usable width of that display, so an oversized bar can never hang off screen.
 - The capture filter in `FocusGrayscale.swift` excludes `FocusBarPanel` alongside
   `FocusOverlayPanel`, and the collector's pointer exclusion covers the bar's frame while it is
   visible, so bar clicks are never recorded as clicks in the app underneath.
@@ -534,17 +562,21 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   bottom centre without the app coming forward, that hovering reveals the controls without the bar
   resizing, and that clicking pause from another app neither activates OpenHistory Focus nor takes
   your typing focus. Drag it to another display, restart the app and start a session: it should
-  come back clamped onto a connected display. Choose **Focus Floating Bar** from the menu-bar icon
-  and Tab through the controls, then press Escape. With a listed site in front, confirm the
-  reminder still appears and that Window/Screen grayscale never contains the bar itself.
+  come back clamped onto a connected display. Drag either edge to widen it, check the resize cursor
+  and the grip, then restart and confirm the width came back; try **Fit Display Width** and
+  **Reset Width** on each display. Watch the fill grow smoothly, pause and confirm it freezes where
+  it was, and turn Reduce Motion on mid-session to confirm it steps with the countdown instead.
+  Choose **Focus Floating Bar** from the menu-bar icon and Tab through the controls, then press
+  Escape. With a listed site in front, confirm the reminder still appears and that Window/Screen
+  grayscale never contains the bar itself.
 - Manual check for the menu bar in Dock presentation: start a session and confirm a temporary icon
   with the countdown appears, that its menu offers every session control, and that it disappears
   when the session completes while the app stays in the Dock.
 
 Automated coverage includes domain anti-spoofing, malformed IPC and persistence, session expiry,
 pause and resume across a passed deadline, editing a running session, malformed and stale bar
-actions, the bar preference migration and position validation, menu-bar presence mapping,
-floating-bar placement clamping,
+actions, the bar preference migration and position and width validation, menu-bar presence
+mapping, floating-bar placement clamping, resize and fit geometry,
 snooze, dismiss, cooldown, re-entry, stale and out-of-order evidence, stale native actions,
 unknown evidence, stop, pause and restart, day reads well beyond 250 events, midnight privacy,
 gap labels, truncation limits, path traversal and symlinked files.
@@ -588,7 +620,11 @@ gap labels, truncation limits, path traversal and symlinked files.
   guarantee window-level click-through. Full-screen apps, several Spaces, mixed-resolution displays
   and physical keyboard delivery into the bar need manual verification per macOS version.
 - A session never resumes after a restart, so the bar and the temporary menu-bar icon do not come
-  back on their own either; the saved bar position does.
+  back on their own either; the saved bar position and width do.
+- Both edge drags, Fit Display Width, Reset Width and saved-width restoration were checked in the
+  installed app on macOS 26.6.2. The production animation also passed a native presentation-layer
+  fixture. Other macOS versions and physical multi-display transitions still need testing. A fill
+  animation stopped by the system is corrected by the countdown tick, not continuously.
 - Idle time is not recorded in the timeline; only live idle suppresses reminders.
 - A day file written under a different time zone is shown under the date in its file name.
 - Chat still requires a cloud model.

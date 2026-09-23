@@ -1,5 +1,6 @@
 import {
   FOCUS_BAR_PRESENTATIONS,
+  FOCUS_BAR_WIDTH,
   FOCUS_EXPERIENCES,
   FOCUS_LIMITS,
   parseFocusDomain,
@@ -78,6 +79,11 @@ export const FocusBarPositionSchema: z.ZodType<FocusBarPosition> = z.object({
   y: BarCoordinateSchema
 }).strict();
 
+export const FocusBarWidthSchema = z.number().finite()
+  .min(FOCUS_BAR_WIDTH.minimum)
+  .max(FOCUS_BAR_WIDTH.maximum)
+  .transform((value) => Math.round(value));
+
 /** Renderer or bar edit of the running session. Every field is optional and applied on its own. */
 export const FocusSessionEditSchema: z.ZodType<FocusSessionEdit> = z.object({
   goalId: GoalIdSchema.optional(),
@@ -132,7 +138,8 @@ export const FocusDocumentSchema = z.object({
   goals: z.array(GoalSchema).max(FOCUS_LIMITS.goals),
   selectedGoalId: GoalIdSchema.nullable(),
   preferences: FocusPreferencesSchema,
-  barPosition: FocusBarPositionSchema.nullable().default(null)
+  barPosition: FocusBarPositionSchema.nullable().default(null),
+  barWidth: FocusBarWidthSchema.default(FOCUS_BAR_WIDTH.default)
 }).strict().superRefine((document, context) => {
   const ids = new Set<string>();
   for (const goal of document.goals) {

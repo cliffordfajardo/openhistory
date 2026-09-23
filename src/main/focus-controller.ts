@@ -19,6 +19,7 @@ import {
 import {
   FocusBarPositionSchema,
   FocusBarPresentationSchema,
+  FocusBarWidthSchema,
   FocusExperienceSchema,
   FocusPreferencesInputSchema,
   FocusSessionEditSchema,
@@ -504,7 +505,17 @@ export class FocusController extends EventEmitter {
         if (x === undefined || y === undefined) return;
         const position = FocusBarPositionSchema.safeParse({ x, y });
         if (!position.success) return;
-        this.options.store.saveBarPosition(position.data);
+        this.options.store.saveBarGeometry({ position: position.data });
+        this.publish();
+        break;
+      }
+      case "resized": {
+        const { x, y, width } = parsed.data;
+        if (x === undefined || y === undefined || width === undefined) return;
+        const position = FocusBarPositionSchema.safeParse({ x, y });
+        const parsedWidth = FocusBarWidthSchema.safeParse(width);
+        if (!position.success || !parsedWidth.success) return;
+        this.options.store.saveBarGeometry({ position: position.data, width: parsedWidth.data });
         this.publish();
         break;
       }
@@ -520,7 +531,10 @@ export class FocusController extends EventEmitter {
       this.hideBar();
       return;
     }
-    const snapshot = focusBarSnapshot(session, this.now(), document.barPosition);
+    const snapshot = focusBarSnapshot(session, this.now(), {
+      position: document.barPosition,
+      width: document.barWidth
+    });
     const serialized = JSON.stringify(snapshot);
     if (serialized === this.lastBarSnapshot) return;
     try {

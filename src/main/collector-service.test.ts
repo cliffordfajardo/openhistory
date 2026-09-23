@@ -269,7 +269,8 @@ test("exposes the floating bar only when the bridge has all of its calls", async
     pausedRemainingSeconds: null,
     totalSeconds: 1_500,
     snoozed: false,
-    position: null
+    position: null,
+    width: 460
   }), "no_display");
   assert.equal((JSON.parse(snapshots[0]!) as { sessionId: string }).sessionId, "session-1");
   bar.hide();

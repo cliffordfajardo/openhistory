@@ -142,3 +142,28 @@ and Spaces, complete VoiceOver navigation, prolonged resource profiling, precise
 Escape, and combined grayscale/amber visual behavior. Automated geometry and exclusion tests are not
 substitutes for those platform checks. Computer control was intermittently interrupted by concurrent
 user interaction, so only the successful interactions above are claimed.
+
+
+## Smooth progress and resizable width
+
+Validated on 23 September 2026. Typechecking, all 359 TypeScript tests, all 46 Swift tests,
+native bridge smoke, distribution checks and inference-preservation checks pass. The Apple Silicon
+app builds with the existing development identity and passes strict deep signature verification.
+
+A temporary native fixture compiled the production FocusBar implementation and sampled its actual
+Core Animation presentation layer. The old implementation failed subsecond progression and resize
+fraction checks. The updated fill advanced through 119.465, 124.307, 129.133 and 133.969 points between
+one-second countdown ticks. Pause froze the fill and removed its animation. Updating width preserved
+the elapsed fraction. An in-process Reduce Motion override removed animation and stepped on the next
+tick without changing macOS settings. Hide removed animation and invalidated the paint timer.
+
+Installed-app checks confirmed Fit Display Width at 1,728 points, Reset Width at 460 points, and full
+width restoration after quitting, relaunching and starting another session. Dragging the right edge
+reduced width to 1,328 points; dragging the left edge reduced it to 1,228 while saving x=100. Both
+retained the 54-point height. Initial automated drags exposed global pointer sampling in the handler;
+using each event's screen-converted location fixed the same gestures. A separate geometry regression
+failed before correcting opposite-edge movement at display boundaries, then passed.
+
+The app is left running with compact width and approximately the prior 6:38 PM session end time.
+Physical multi-display transitions, fullscreen/Spaces and exhaustive cursor behavior remain untested.
+The intermittent missing amber edge/card report above remains unresolved.

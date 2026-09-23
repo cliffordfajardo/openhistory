@@ -1,4 +1,4 @@
-import type { ActiveFocusSession } from "@shared/focus";
+import { FOCUS_BAR_WIDTH, type ActiveFocusSession } from "@shared/focus";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -27,8 +27,10 @@ function session(overrides: Partial<ActiveFocusSession> = {}): ActiveFocusSessio
   };
 }
 
+const COMPACT = { position: null, width: FOCUS_BAR_WIDTH.default };
+
 test("a running session sends a deadline the bar can count down from on its own", () => {
-  const snapshot = focusBarSnapshot(session(), T0 + 5_000, null);
+  const snapshot = focusBarSnapshot(session(), T0 + 5_000, COMPACT);
   assert.deepEqual(snapshot, {
     sessionId: "session-a",
     goalTitle: "Ship the guide",
@@ -37,10 +39,11 @@ test("a running session sends a deadline the bar can count down from on its own"
     pausedRemainingSeconds: null,
     totalSeconds: 1_500,
     snoozed: false,
-    position: null
+    position: null,
+    width: 460
   });
   assert.deepEqual(
-    focusBarSnapshot(session(), T0 + 60_000, null),
+    focusBarSnapshot(session(), T0 + 60_000, COMPACT),
     snapshot,
     "a snapshot taken a minute later is identical, so nothing is sent while the clock runs"
   );
@@ -50,17 +53,18 @@ test("a paused session sends its frozen countdown instead of a deadline", () => 
   const snapshot = focusBarSnapshot(
     session({ endsAt: null, pausedRemainingMs: 8 * 60_000 + 400 }),
     T0 + 60 * 60_000,
-    { x: 12, y: 30 }
+    { position: { x: 12, y: 30 }, width: 1_200 }
   );
   assert.equal(snapshot.endsAtEpochSeconds, null);
   assert.equal(snapshot.pausedRemainingSeconds, 480.4);
   assert.deepEqual(snapshot.position, { x: 12, y: 30 });
+  assert.equal(snapshot.width, 1_200, "the saved width travels with the position");
 });
 
 test("snooze is reported while it lasts and not after it expires", () => {
   const snoozed = session({ snoozedUntil: new Date(T0 + 5 * 60_000).toISOString() });
-  assert.equal(focusBarSnapshot(snoozed, T0, null).snoozed, true);
-  assert.equal(focusBarSnapshot(snoozed, T0 + 5 * 60_000, null).snoozed, false);
+  assert.equal(focusBarSnapshot(snoozed, T0, COMPACT).snoozed, true);
+  assert.equal(focusBarSnapshot(snoozed, T0 + 5 * 60_000, COMPACT).snoozed, false);
 });
 
 test("the countdown reads as minutes, and as hours only when there are hours left", () => {
@@ -93,6 +97,10 @@ test("bar actions are accepted only in their exact shape", () => {
     FocusBarActionSchema.safeParse({ action: "moved", sessionId: "session-a", x: -12.5, y: 40 }).success,
     true
   );
+  assert.equal(
+    FocusBarActionSchema.safeParse({ action: "resized", sessionId: "session-a", x: 0, y: 40, width: 980 }).success,
+    true
+  );
   for (const value of [
     undefined,
     null,
@@ -104,7 +112,10 @@ test("bar actions are accepted only in their exact shape", () => {
     { action: "pause", sessionId: "session-a", extra: 1 },
     { action: "moved", sessionId: "session-a", x: Number.POSITIVE_INFINITY, y: 0 },
     { action: "moved", sessionId: "session-a", x: 400_000, y: 0 },
-    { action: "moved", sessionId: "session-a", x: "12", y: 0 }
+    { action: "moved", sessionId: "session-a", x: "12", y: 0 },
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: Number.NaN },
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: "980" },
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: 400_000 }
   ]) {
     assert.equal(FocusBarActionSchema.safeParse(value).success, false, JSON.stringify(value) ?? "undefined");
   }
@@ -113,7 +124,7 @@ test("bar actions are accepted only in their exact shape", () => {
 
 test("the native deadline preserves milliseconds across resume", () => {
   const deadline = T0 + 60_750;
-  const snapshot = focusBarSnapshot(session({ endsAt: new Date(deadline).toISOString() }), T0 + 750, null);
+  const snapshot = focusBarSnapshot(session({ endsAt: new Date(deadline).toISOString() }), T0 + 750, COMPACT);
   assert.equal(snapshot.endsAtEpochSeconds, deadline / 1_000);
   assert.equal(Math.ceil(snapshot.endsAtEpochSeconds! - (T0 + 750) / 1_000), 60);
 });

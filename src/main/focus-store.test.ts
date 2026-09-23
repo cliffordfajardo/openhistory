@@ -25,7 +25,8 @@ test("starts empty, creates goals privately and selects the first one", async (c
       amberEdge: true,
       barPresentation: "floating"
     },
-    barPosition: null
+    barPosition: null,
+    barWidth: 460
   });
 
   const { goal } = store.saveGoal({ title: "  Ship\tthe   guide ", why: "Readers\r\nare waiting", currentFocus: "Outline" });
@@ -131,6 +132,7 @@ test("files from before the floating bar get it, and the choice survives a resta
   assert.equal(store.recoveredFromInvalidFile, false);
   assert.equal(store.load().preferences.barPresentation, "floating");
   assert.equal(store.load().barPosition, null);
+  assert.equal(store.load().barWidth, 460, "a file written before resizing gets the compact width");
 
   store.updatePreferences({ barPresentation: "menuBar" });
   assert.equal(new FocusStore(directory).load().preferences.barPresentation, "menuBar");
@@ -139,12 +141,28 @@ test("files from before the floating bar get it, and the choice survives a resta
 test("remembers where the floating bar was left and rounds the coordinates", async (context) => {
   const directory = await testDirectory(context);
   const store = new FocusStore(directory);
-  store.saveBarPosition({ x: 120.4, y: -33.6 });
+  store.saveBarGeometry({ position: { x: 120.4, y: -33.6 } });
   assert.deepEqual(new FocusStore(directory).load().barPosition, { x: 120, y: -34 });
-  store.saveBarPosition(null);
+  store.saveBarGeometry({ position: null });
   assert.equal(new FocusStore(directory).load().barPosition, null);
-  assert.throws(() => store.saveBarPosition({ x: Number.NaN, y: 0 }));
-  assert.throws(() => store.saveBarPosition({ x: 1e9, y: 0 }));
+  assert.throws(() => store.saveBarGeometry({ position: { x: Number.NaN, y: 0 } }));
+  assert.throws(() => store.saveBarGeometry({ position: { x: 1e9, y: 0 } }));
+});
+
+test("remembers how wide the floating bar was left, alongside where it was left", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FocusStore(directory);
+  store.saveBarGeometry({ position: { x: 0, y: 40 }, width: 1_512.6 });
+  const reloaded = new FocusStore(directory).load();
+  assert.equal(reloaded.barWidth, 1_513, "the width is rounded like the coordinates");
+  assert.deepEqual(reloaded.barPosition, { x: 0, y: 40 }, "one resize saves the corner and the width together");
+
+  store.saveBarGeometry({ position: { x: 20, y: 40 } });
+  assert.equal(new FocusStore(directory).load().barWidth, 1_513, "a move on its own keeps the width");
+  assert.throws(() => store.saveBarGeometry({ width: 10 }));
+  assert.throws(() => store.saveBarGeometry({ width: 1e9 }));
+  assert.throws(() => store.saveBarGeometry({ width: Number.NaN }));
+  assert.equal(new FocusStore(directory).load().barWidth, 1_513, "a rejected width never reaches the file");
 });
 
 test("reads files saved before reminder styles as amber without losing goals or sites", async (context) => {
@@ -169,7 +187,8 @@ test("reads files saved before reminder styles as amber without losing goals or 
       amberEdge: true,
       barPresentation: "floating"
     },
-    barPosition: null
+    barPosition: null,
+    barWidth: 460
   });
   assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   assert.deepEqual(readdirSync(directory), ["focus.json"]);
@@ -190,7 +209,10 @@ test("never stores an active session", async (context) => {
   const store = new FocusStore(directory, sequentialIds());
   store.saveGoal({ title: "Goal", why: "", currentFocus: "" });
   const stored = JSON.parse(readFileSync(store.path, "utf8")) as Record<string, unknown>;
-  assert.deepEqual(Object.keys(stored).sort(), ["barPosition", "goals", "preferences", "selectedGoalId", "version"]);
+  assert.deepEqual(
+    Object.keys(stored).sort(),
+    ["barPosition", "barWidth", "goals", "preferences", "selectedGoalId", "version"]
+  );
 });
 
 test("recovers from malformed files by starting fresh and preserving the original", async (context) => {
@@ -239,6 +261,20 @@ test("recovers from malformed files by starting fresh and preserving the origina
       selectedGoalId: null,
       preferences: { domains: [], durationMinutes: 25, amberEdge: true },
       barPosition: { x: "left", y: 0 }
+    }),
+    JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, amberEdge: true },
+      barWidth: 40
+    }),
+    JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, amberEdge: true },
+      barWidth: "wide"
     })
   ]) {
     const directory = await testDirectory(context);

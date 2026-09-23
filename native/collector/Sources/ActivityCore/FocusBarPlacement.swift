@@ -6,13 +6,28 @@ public enum FocusBarPlacement {
     /// Gap kept below the bar, inside the usable area, so it floats just above the Dock.
     public static let bottomMargin: CGFloat = 16
 
-    /// Bottom centre of the usable area of the display the bar starts on.
+    /// The compact width a new bar, and **Reset Width**, starts from.
+    public static let defaultWidth: CGFloat = 460
+    /// Narrow enough to be out of the way, wide enough to keep the goal and every control legible.
+    public static let minimumWidth: CGFloat = 360
+    /// A generous ceiling; the usable width of the display the bar is on is the real limit.
+    public static let maximumWidth: CGFloat = 20_000
+
+    /// Which edge a resize drag holds on to; the opposite edge stays where it is.
+    public enum HorizontalEdge: Equatable {
+        case leading
+        case trailing
+    }
+
+    /// Bottom centre of the usable area of the display the bar starts on, trimmed to fit it.
     public static func defaultFrame(size: CGSize, in visibleFrame: CGRect) -> CGRect {
-        CGRect(
-            x: visibleFrame.midX - size.width / 2,
-            y: visibleFrame.minY + bottomMargin,
-            width: size.width,
-            height: size.height
+        let width = min(size.width, visibleFrame.width)
+        let height = min(size.height, visibleFrame.height)
+        return CGRect(
+            x: visibleFrame.midX - width / 2,
+            y: min(visibleFrame.minY + bottomMargin, visibleFrame.maxY - height),
+            width: width,
+            height: height
         ).integral
     }
 
@@ -34,6 +49,53 @@ public enum FocusBarPlacement {
             }
         }
         return defaultFrame(size: size, in: primary)
+    }
+
+    /**
+     The frame a horizontal resize drag has reached: `deltaX` is how far the pointer moved from
+     where the drag started, `current` the frame it started from. The edge that is not dragged
+     stays put, the width stays between the minimum and the usable width of the bar's display,
+     and the result is kept fully on that display.
+     */
+    public static func resizedFrame(
+        current: CGRect,
+        edge: HorizontalEdge,
+        deltaX: CGFloat,
+        visibleFrames: [CGRect]
+    ) -> CGRect? {
+        guard let host = bestVisibleFrame(for: current, in: visibleFrames) ?? visibleFrames.first else {
+            return nil
+        }
+        let start = clamp(current, into: host)
+        let available = edge == .trailing ? host.maxX - start.minX : start.maxX - host.minX
+        let requested = edge == .trailing ? start.width + deltaX : start.width - deltaX
+        let width = min(clampWidth(requested, in: host), available)
+        let x = edge == .trailing ? start.minX : start.maxX - width
+        let resized = CGRect(x: x, y: start.minY, width: width, height: start.height)
+        return clamp(resized, into: host).integral
+    }
+
+    /**
+     The whole usable width of the display holding most of the bar, keeping the bar's height and
+     the row it is already on. A bar on no connected display has no row worth keeping, so it takes
+     the default one just above the Dock instead of the edge it would otherwise be pulled to.
+     */
+    public static func fitFrame(current: CGRect, visibleFrames: [CGRect]) -> CGRect? {
+        let onScreen = bestVisibleFrame(for: current, in: visibleFrames)
+        guard let host = onScreen ?? visibleFrames.first else { return nil }
+        let fitted = CGRect(
+            x: host.minX,
+            y: onScreen == nil ? host.minY + bottomMargin : current.minY,
+            width: clampWidth(host.width, in: host),
+            height: current.height
+        )
+        return clamp(fitted, into: host).integral
+    }
+
+    /// The rectangle clamp handles displays narrower than the minimum supported width.
+    public static func clampWidth(_ width: CGFloat, in visibleFrame: CGRect) -> CGFloat {
+        let ceiling = max(minimumWidth, min(maximumWidth, visibleFrame.width))
+        return min(max(width.isFinite ? width : defaultWidth, minimumWidth), ceiling)
     }
 
     /// The usable area holding the largest part of `rect`, or nil when none of it is on screen.
