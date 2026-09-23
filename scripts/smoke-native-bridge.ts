@@ -13,6 +13,10 @@ interface NativeBridge {
   showFocusOverlay(requestJSON: string): number;
   hideFocusOverlay(nudgeId: string, immediate: boolean): void;
   setFocusOverlayActionHandler(handler: ((line: string) => void) | null): void;
+  updateFocusBar(snapshotJSON: string): number;
+  hideFocusBar(): void;
+  focusFocusBar(): void;
+  setFocusBarActionHandler(handler: ((line: string) => void) | null): void;
   screenCaptureAccess(): boolean;
   requestScreenCaptureAccess(): boolean;
   systemColorFilterRead(): { enabled: boolean; type: number } | null;
@@ -30,6 +34,7 @@ try {
   for (const name of [
     "startCollector", "stopCollector", "setForegroundObservation",
     "showFocusOverlay", "hideFocusOverlay", "setFocusOverlayActionHandler",
+    "updateFocusBar", "hideFocusBar", "focusFocusBar", "setFocusBarActionHandler",
     "screenCaptureAccess", "requestScreenCaptureAccess", "systemColorFilterRead", "systemColorFilterWrite"
   ] as const) {
     assert.equal(typeof bridge[name], "function", `bridge is missing ${name}`);
@@ -96,6 +101,34 @@ try {
   bridge.hideFocusOverlay("smoke-1", true);
   bridge.setFocusOverlayActionHandler(() => undefined);
   bridge.setFocusOverlayActionHandler(null);
+
+  // Only malformed bar snapshots are sent: a valid one would put a panel on the person's screen.
+  const barSnapshot = {
+    sessionId: "session-smoke",
+    goalTitle: "Smoke",
+    intention: "",
+    endsAtEpochSeconds: Math.round(Date.now() / 1_000) + 600,
+    pausedRemainingSeconds: null,
+    totalSeconds: 600,
+    snoozed: false,
+    position: null
+  };
+  assert.throws(() => bridge.updateFocusBar(42 as unknown as string), TypeError);
+  assert.equal(bridge.updateFocusBar("{not json"), 1, "a malformed bar snapshot must be rejected");
+  assert.equal(bridge.updateFocusBar("{}"), 1, "an incomplete bar snapshot must be rejected");
+  assert.equal(bridge.updateFocusBar(JSON.stringify({ ...barSnapshot, sessionId: "" })), 1,
+    "a bar snapshot without a session must be rejected");
+  assert.equal(bridge.updateFocusBar(JSON.stringify({ ...barSnapshot, pausedRemainingSeconds: 600 })), 1,
+    "a snapshot that is both running and paused must be rejected");
+  assert.equal(bridge.updateFocusBar(JSON.stringify({ ...barSnapshot, totalSeconds: 0 })), 1,
+    "a bar snapshot without a length must be rejected");
+  assert.equal(bridge.updateFocusBar(JSON.stringify({
+    ...barSnapshot,
+    position: { x: 1e9, y: 0 }
+  })), 1, "a bar position far outside any display must be rejected");
+  bridge.hideFocusBar();
+  bridge.setFocusBarActionHandler(() => undefined);
+  bridge.setFocusBarActionHandler(null);
 
   const started = bridge.startCollector(dataDirectory, JSON.stringify({
     captureWindowTitles: false,

@@ -104,6 +104,7 @@ build_architecture() {
     native/collector/Sources/ActivityCollector/CollectorRuntime.swift \
     native/bridge/EmbeddedCollectorBridge.swift \
     native/bridge/FocusOverlay.swift \
+    native/bridge/FocusBar.swift \
     native/bridge/FocusGrayscale.swift \
     native/bridge/FocusWindowGrayscale.swift \
     "$@" \

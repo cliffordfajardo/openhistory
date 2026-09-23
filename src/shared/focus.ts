@@ -8,7 +8,9 @@ export const FOCUS_LIMITS = {
   domains: 100,
   domainLength: 253,
   minimumDurationMinutes: 5,
-  maximumDurationMinutes: 240
+  maximumDurationMinutes: 240,
+  /** A running session can be shortened to a single minute; only starting needs five. */
+  minimumRemainingMinutes: 1
 } as const;
 
 export const FOCUS_DURATION_PRESETS = [25, 50] as const;
@@ -53,12 +55,26 @@ export interface GoalDraft {
 export const FOCUS_EXPERIENCES = ["amber", "grayscale_window", "grayscale_screen", "grayscale_system"] as const;
 export type FocusExperience = (typeof FOCUS_EXPERIENCES)[number];
 
+/**
+ * Where the running session is shown: the floating bar (a small native panel) or only the
+ * menu-bar icon. Both always offer the same session controls.
+ */
+export const FOCUS_BAR_PRESENTATIONS = ["floating", "menuBar"] as const;
+export type FocusBarPresentation = (typeof FOCUS_BAR_PRESENTATIONS)[number];
+
+/** Bottom-left corner of the floating bar in global AppKit points (y up). */
+export interface FocusBarPosition {
+  x: number;
+  y: number;
+}
+
 export interface FocusPreferences {
   domains: string[];
   durationMinutes: number;
   experience: FocusExperience;
   /** Warm edge around the display, independent of grayscale. */
   amberEdge: boolean;
+  barPresentation: FocusBarPresentation;
 }
 
 /**
@@ -118,6 +134,11 @@ export interface FocusStartRequest {
   durationMinutes: number;
 }
 
+/**
+ * A session is paused when `endsAt` is null; `pausedRemainingMs` then holds the frozen countdown.
+ * `totalMs` is the planned length including edits, so progress survives a pause and a new
+ * deadline (it is never derived from `endsAt - startedAt`).
+ */
 export type FocusSession =
   | { status: "idle" }
   | {
@@ -127,9 +148,32 @@ export type FocusSession =
     intention: string;
     domains: string[];
     startedAt: string;
-    endsAt: string;
+    endsAt: string | null;
+    totalMs: number;
+    pausedRemainingMs: number | null;
     snoozedUntil: string | null;
   };
+
+export type ActiveFocusSession = Extract<FocusSession, { status: "active" }>;
+
+/** Time left in a session: frozen while paused, counted down from the deadline while running. */
+export function focusSessionRemainingMs(session: ActiveFocusSession, now: number): number {
+  if (session.endsAt === null) return Math.max(0, session.pausedRemainingMs ?? 0);
+  return Math.max(0, Date.parse(session.endsAt) - now);
+}
+
+/** Share of the planned length already spent, from 0 to 1. */
+export function focusSessionProgress(session: ActiveFocusSession, now: number): number {
+  const total = Math.max(1, session.totalMs);
+  return Math.min(1, Math.max(0, (total - focusSessionRemainingMs(session, now)) / total));
+}
+
+/** A change to a running session. Omitted fields are left as they are. */
+export interface FocusSessionEdit {
+  goalId?: string;
+  intention?: string;
+  remainingMinutes?: number;
+}
 
 /**
  * Why Focus cannot currently notice a listed site. Anything other than "ready" means reminders
@@ -147,6 +191,7 @@ export type FocusDetectionState =
 /** Coarse, content-free summary of the latest foreground evidence for the Focus page. */
 export type FocusForegroundSummary =
   | "not_watching"
+  | "paused"
   | "waiting"
   | "listed_site"
   | "other_site"
@@ -171,6 +216,10 @@ export interface FocusViewState {
   screenCapture: FocusScreenCaptureState;
   systemFilter: FocusSystemFilterState;
   effect: FocusEffectState | null;
+  /** Saved bottom-left corner of the floating bar, or null while it has never been moved. */
+  barPosition: FocusBarPosition | null;
+  /** The native floating bar exists in this build. */
+  barAvailable: boolean;
   recoveredFromInvalidFile: boolean;
 }
 

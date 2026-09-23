@@ -19,7 +19,11 @@ Last updated: August 16, 2026
 > to a model or uploaded, and are released when the reminder hides. Activity capture itself still
 > takes no screenshots. The optional **System** grayscale captures nothing: it switches macOS
 > Color Filters through a private system setting and keeps only your earlier filter settings in a
-> small restore journal outside the data folder until they are restored. Goals and Focus preferences are stored in the same private folder, are
+> small restore journal outside the data folder until they are restored. While a session runs, an
+> optional floating bar shows only what you already entered — the goal, the countdown and its
+> controls — and reads nothing from other apps; where you drag it is remembered as two screen
+> coordinates in the same private folder. Clicks on that bar and on the reminder card are excluded
+> from click recording, so app controls are never logged as activity in another app. Goals and Focus preferences are stored in the same private folder, are
 > removed by "Delete all local data", and are not sent to models or exposed through MCP. The
 > upstream auto-updater is disabled. See [docs/FOCUS.md](docs/FOCUS.md). Where this note and the
 > policy below differ, this note describes the fork.

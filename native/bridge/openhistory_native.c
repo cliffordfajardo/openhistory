@@ -26,9 +26,18 @@ extern void openhistory_focus_overlay_set_action_callback(
     void *context
 );
 extern void openhistory_focus_overlay_shutdown(void);
+extern int32_t openhistory_focus_bar_update(const char *snapshot_json);
+extern void openhistory_focus_bar_hide(void);
+extern void openhistory_focus_bar_focus(void);
+extern void openhistory_focus_bar_set_action_callback(
+    openhistory_collector_event_callback callback,
+    void *context
+);
+extern void openhistory_focus_bar_shutdown(void);
 
 static napi_threadsafe_function collector_events = NULL;
 static napi_threadsafe_function focus_actions = NULL;
+static napi_threadsafe_function focus_bar_actions = NULL;
 static bool cleanup_hook_installed = false;
 
 static napi_value boolean_value(napi_env env, bool value) {
@@ -210,13 +219,32 @@ static void receive_focus_action(const char *line, void *context) {
     if (napi_call_threadsafe_function(focus_actions, copy, napi_tsfn_nonblocking) != napi_ok) free(copy);
 }
 
+static void release_focus_bar_actions(void) {
+    openhistory_focus_bar_set_action_callback(NULL, NULL);
+    if (focus_bar_actions != NULL) {
+        napi_release_threadsafe_function(focus_bar_actions, napi_tsfn_release);
+        focus_bar_actions = NULL;
+    }
+}
+
+static void receive_focus_bar_action(const char *line, void *context) {
+    (void)context;
+    if (line == NULL || focus_bar_actions == NULL) return;
+    char *copy = strdup(line);
+    if (copy == NULL) return;
+    if (napi_call_threadsafe_function(focus_bar_actions, copy, napi_tsfn_nonblocking) != napi_ok) free(copy);
+}
+
 static void cleanup_native_bridge(void *argument) {
     (void)argument;
     // Node finalizes thread-safe functions during environment teardown before this hook runs, so
     // only detach native producers here and forget the handles instead of releasing them again.
     openhistory_focus_overlay_set_action_callback(NULL, NULL);
+    openhistory_focus_bar_set_action_callback(NULL, NULL);
+    openhistory_focus_bar_shutdown();
     openhistory_focus_overlay_shutdown();
     openhistory_collector_stop();
+    focus_bar_actions = NULL;
     focus_actions = NULL;
     collector_events = NULL;
 }
@@ -293,6 +321,74 @@ static napi_value hide_focus_overlay(napi_env env, napi_callback_info info) {
     if (nudge_id == NULL) return NULL;
     openhistory_focus_overlay_hide(nudge_id, immediate);
     free(nudge_id);
+    return undefined_value(env);
+}
+
+static napi_value set_focus_bar_action_handler(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    napi_valuetype type = napi_undefined;
+    if (argument_count >= 1 && napi_typeof(env, argument, &type) != napi_ok) return NULL;
+
+    release_focus_bar_actions();
+    if (type == napi_undefined || type == napi_null) return undefined_value(env);
+    if (type != napi_function) {
+        napi_throw_type_error(env, NULL, "setFocusBarActionHandler requires a function or null");
+        return NULL;
+    }
+
+    napi_value resource_name;
+    napi_status status = napi_create_string_utf8(
+        env,
+        "OpenHistory focus bar actions",
+        NAPI_AUTO_LENGTH,
+        &resource_name
+    );
+    if (status == napi_ok) {
+        status = napi_create_threadsafe_function(
+            env, argument, NULL, resource_name, 64, 1,
+            NULL, NULL, NULL, deliver_collector_event, &focus_bar_actions
+        );
+    }
+    if (status != napi_ok) {
+        focus_bar_actions = NULL;
+        napi_throw_error(env, NULL, "Unable to create the focus bar action channel");
+        return NULL;
+    }
+    // Bar clicks must never keep the process alive on their own.
+    napi_unref_threadsafe_function(env, focus_bar_actions);
+    openhistory_focus_bar_set_action_callback(receive_focus_bar_action, NULL);
+    return undefined_value(env);
+}
+
+static napi_value update_focus_bar(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    if (argument_count != 1) {
+        napi_throw_type_error(env, NULL, "updateFocusBar requires snapshot JSON");
+        return NULL;
+    }
+    char *snapshot_json = copy_utf8_argument(env, argument, "updateFocusBar snapshot must be JSON text");
+    if (snapshot_json == NULL) return NULL;
+    int32_t result = openhistory_focus_bar_update(snapshot_json);
+    free(snapshot_json);
+    napi_value value;
+    if (napi_create_int32(env, result, &value) != napi_ok) return NULL;
+    return value;
+}
+
+static napi_value hide_focus_bar(napi_env env, napi_callback_info info) {
+    (void)info;
+    openhistory_focus_bar_hide();
+    return undefined_value(env);
+}
+
+// Only reached from an explicit request, because it takes keyboard focus.
+static napi_value focus_focus_bar(napi_env env, napi_callback_info info) {
+    (void)info;
+    openhistory_focus_bar_focus();
     return undefined_value(env);
 }
 
@@ -501,6 +597,10 @@ NAPI_MODULE_INIT() {
         { "setFocusOverlayActionHandler", NULL, set_focus_overlay_action_handler, NULL, NULL, NULL, napi_default, NULL },
         { "showFocusOverlay", NULL, show_focus_overlay, NULL, NULL, NULL, napi_default, NULL },
         { "hideFocusOverlay", NULL, hide_focus_overlay, NULL, NULL, NULL, napi_default, NULL },
+        { "setFocusBarActionHandler", NULL, set_focus_bar_action_handler, NULL, NULL, NULL, napi_default, NULL },
+        { "updateFocusBar", NULL, update_focus_bar, NULL, NULL, NULL, napi_default, NULL },
+        { "hideFocusBar", NULL, hide_focus_bar, NULL, NULL, NULL, napi_default, NULL },
+        { "focusFocusBar", NULL, focus_focus_bar, NULL, NULL, NULL, napi_default, NULL },
         { "isTrusted", NULL, is_trusted, NULL, NULL, NULL, napi_default, NULL },
         { "requestTrust", NULL, request_trust, NULL, NULL, NULL, napi_default, NULL },
         { "screenCaptureAccess", NULL, screen_capture_access, NULL, NULL, NULL, napi_default, NULL },

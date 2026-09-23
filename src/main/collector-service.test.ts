@@ -237,6 +237,50 @@ test("exposes the native reminder only when the bridge provides it", async (cont
   assert.equal((JSON.parse(requests[0]!) as { nudgeId: string }).nudgeId, "preview-1");
 });
 
+test("exposes the floating bar only when the bridge has all of its calls", async (context) => {
+  const directory = await testDirectory(context);
+  const partial = Object.assign(new FakeNativeCollector(), {
+    updateFocusBar: () => 0,
+    hideFocusBar: () => undefined
+  });
+  assert.equal(new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, partial).focusBar(), undefined,
+    "an older bridge would ignore bar snapshots");
+
+  const snapshots: string[] = [];
+  const handlers: Array<((line: string) => void) | null> = [];
+  let hides = 0;
+  let focuses = 0;
+  const native = Object.assign(new FakeNativeCollector(), {
+    updateFocusBar: (json: string) => {
+      snapshots.push(json);
+      return 3;
+    },
+    hideFocusBar: () => { hides += 1; },
+    focusFocusBar: () => { focuses += 1; },
+    setFocusBarActionHandler: (next: ((line: string) => void) | null) => { handlers.push(next); }
+  });
+  const bar = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native).focusBar();
+  assert(bar);
+  assert.equal(bar.update({
+    sessionId: "session-1",
+    goalTitle: "Ship the guide",
+    intention: "",
+    endsAtEpochSeconds: 1_800_001_500,
+    pausedRemainingSeconds: null,
+    totalSeconds: 1_500,
+    snoozed: false,
+    position: null
+  }), "no_display");
+  assert.equal((JSON.parse(snapshots[0]!) as { sessionId: string }).sessionId, "session-1");
+  bar.hide();
+  bar.focus();
+  bar.setActionHandler(() => undefined);
+  bar.setActionHandler(null);
+  assert.deepEqual([hides, focuses], [1, 1]);
+  assert.deepEqual(handlers.map((value) => typeof value), ["function", "object"]);
+  assert.equal(handlers.at(-1), null);
+});
+
 test("exposes Color Filters only when the bridge has both calls, passing settings as arguments", async (context) => {
   const directory = await testDirectory(context);
   const readOnly = Object.assign(new FakeNativeCollector(), { systemColorFilterRead: () => null });

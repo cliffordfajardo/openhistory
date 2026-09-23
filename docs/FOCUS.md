@@ -6,6 +6,9 @@ adds a calm focus companion on top of OpenHistory's private, local activity coll
 - **Goals**: what you're working toward, why it matters, and your current focus.
 - **Focus sessions**: pick a goal, write an intention, choose 25, 50 or a custom number of
   minutes, and list the sites that tend to pull you away.
+- **A floating bar**: while a session runs, a small dark capsule above the Dock shows the goal and
+  the countdown, with pause, complete and an overflow menu. It can be dragged anywhere, or turned
+  off in favour of the menu-bar icon alone (see [While a session runs](#while-a-session-runs)).
 - **A gentle reminder**: during a session, if a listed site is the front browser tab, a thin warm
   amber edge fades in around that display with a small reminder card near the top: your goal and
   intention, plus **Snooze 5 min** and **Dismiss**. Optionally, grayscale can show only the
@@ -74,6 +77,9 @@ First launch:
 3. Choose the goal, write an intention, pick a duration and press **Start focus**. Adding or removing sites during a session applies immediately, without resetting its timer or bypassing snooze.
 4. Use **Test reminder** at any time to see the real reminder on this display. The preview works
    without Accessibility or capture, and it doesn't affect a running session.
+5. While the session runs, pause it, complete it or change it from the floating bar, the menu-bar
+   icon or the Focus page. All three act on the same session (see
+   [While a session runs](#while-a-session-runs)).
 
 Reminder timing:
 
@@ -90,6 +96,72 @@ Reminder timing:
 
 Sessions live only in memory. Quitting or restarting the app ends the session; it never resumes on
 its own. Goals and the site list are saved.
+
+## While a session runs
+
+The running session has one authority — the Focus state machine in the main process — and three
+views of it: the floating bar, the menu-bar icon and the Focus page. Each offers the same controls,
+and none keeps a clock of its own.
+
+**Pause is not snooze.** They are separate and can be used together:
+
+| | Pause | Snooze |
+| --- | --- | --- |
+| The countdown | frozen; the session outlives the deadline it started with | keeps running |
+| Reminders | none, and nothing is observed at all | none for 5 minutes |
+| Grayscale / amber edge | a visible reminder is removed, and system grayscale restores your Color Filters | the same |
+| Ending it | **Resume session** continues with exactly the time that was left | **Resume reminders**, or it ends by itself |
+
+Pausing stops the foreground observation entirely, so nothing about the front app is looked at
+while a session waits. Resuming starts a new observation generation: the first reminder afterwards
+needs fresh evidence, never a reading from before the pause. A snooze you set stays set across a
+pause; it is an absolute time and is never silently cleared.
+
+**Completing** a session uses the same cleanup as stopping it ever did: reminders hide, grayscale
+is undone, observation stops, and nothing is recorded about the session itself.
+
+**Editing** (bar or menu-bar overflow → **Edit Session…**, or **Edit session** on the Focus page)
+changes the goal it points at, the intention and the minutes left, **on the same session**: its
+identity, the time already spent and its snooze are kept, and it is never restarted. The goal you
+select changes the selected goal but never rewrites the saved goal's title, why or current focus.
+A session whose goal was deleted keeps its own copy and can still be edited. A running session can
+be shortened to as little as 1 minute; starting one still asks for at least 5.
+
+### The floating bar
+
+- About 460 × 54 points, dark, rounded, with a small muted green session indicator and a thin
+  progress fill. The goal truncates visually; VoiceOver reads the whole goal and intention.
+- Pause/resume, complete and the overflow menu (**Edit Session…**, **Move to Menu Bar**) appear on
+  hover **or** keyboard focus, in space that is reserved whether or not they are shown, so the bar
+  never resizes or jumps.
+- Showing the bar or ticking its countdown never activates the app and never makes the bar the key
+  window: it is a nonactivating `NSPanel` shown with `orderFrontRegardless`. Clicking its buttons
+  works without taking focus from the app you are in.
+- **Keyboard access** is explicit: choose **Focus Floating Bar** from the menu-bar icon or
+  **Focus the bar** on the Focus page. That is the only path that activates the app and makes the
+  bar key. Then Tab cycles pause → complete → overflow, Space or Return presses the focused
+  control, and Escape collapses the controls and gives the keyboard back to the previous app.
+- **Moving it**: drag anywhere on the capsule except the controls. The final position is saved in
+  `focus.json` and used for later sessions; it is clamped back onto a connected display when
+  displays change or a saved position no longer exists. The default is bottom centre, above the
+  Dock, and never the top, where the reminder card appears.
+- **Minimizing it** means moving the session to the menu bar: overflow → **Move to Menu Bar**, or
+  the preference under **While a session runs**. The session and its saved position are kept, and
+  **Show Floating Bar** brings it back.
+- Reduce Motion (no fade on reveal), Reduce Transparency (solid capsule) and Increase Contrast
+  (brighter border, opaque controls) are honored and update live.
+- The panel is only as large as the capsule — there is no invisible full-screen hit area — and it
+  is excluded from the grayscale capture filter, so it is never drawn into the gray image. Clicks
+  on it are excluded from click recording.
+
+### The menu-bar icon
+
+A running session always has a menu-bar icon, even when the app is set to show in the Dock. That
+temporary icon appears when the session starts and goes away when it ends; your Dock/menu-bar
+presentation choice is never changed by it. It shows the countdown (or `Paused 12:30`) beside the
+icon and its menu holds every session control: pause/resume, complete, snooze/resume reminders,
+**Edit Session…**, **Show Floating Bar** or **Move Session to Menu Bar**, and **Focus Floating
+Bar** for keyboard entry into the bar.
 
 ## What Focus can and can't notice
 
@@ -318,19 +390,25 @@ Swift sampler (existing, 0.75 s) ──► JSONL activity files (unchanged forma
       │ (only during a session)      Timeline → Activity (per-day reader)
       ▼
 CollectorService (Node): validate + privacy ──► FocusController ◄── renderer IPC (zod-validated)
-                                                   │   ▲
-                         pure focus-state reducer ─┘   │ snooze / dismiss / hidden
-                                                   ▼   │ (nudge + session IDs)
+                                                   │   ▲       ▲
+                         pure focus-state reducer ─┘   │       └── Electron tray (session controls)
+                                                   ▼   │ snooze / dismiss / hidden
                                    FocusOverlay.swift: edge panel + reminder card
+                                                   │   ▲ (nudge + session IDs)
+                                                   ▼   │ pause / resume / complete / edit / moved
+                                      FocusBar.swift: floating session bar (session ID)
 ```
 
 Data shapes (`src/shared/focus.ts`):
 
 - `Goal { id, title, why, currentFocus }`,
   `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" |
-  "grayscale_screen" | "grayscale_system", amberEdge }`.
-  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, and a missing
-  `amberEdge` as `true` only for the amber style.
+  "grayscale_screen" | "grayscale_system", amberEdge, barPresentation: "floating" | "menuBar" }`.
+  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, a missing
+  `amberEdge` as `true` only for the amber style, and a missing `barPresentation` as `"floating"`,
+  so existing files get the bar exactly as a new install does. `focus.json` also holds
+  `barPosition: { x, y } | null`, the bar's saved bottom-left corner in global AppKit points; it
+  lives in the activity-data folder, so "Delete all local data" removes it with everything else.
 - Every reminder request carries `amberEdge`. For `grayscale_system` the native overlay captures
   nothing; `SystemColorFilterController` (`src/main/system-color-filter.ts`) is the single,
   synchronous owner of `SystemColorFilterSettings { enabled, type }` through the native
@@ -345,7 +423,20 @@ Data shapes (`src/shared/focus.ts`):
   the latest reminder or preview. Native effect reports carry the nudge ID and are ignored unless
   that reminder is still visible.
 - `FocusSession` is `idle` or `active { id, goal snapshot, intention, domains, startedAt, endsAt,
-  snoozedUntil }`, kept in memory only.
+  totalMs, pausedRemainingMs, snoozedUntil }`, kept in memory only. `endsAt` is null exactly while
+  the session is paused, and `pausedRemainingMs` then holds the frozen countdown. `totalMs` is the
+  planned length including edits, so progress is never derived from `endsAt - startedAt` after a
+  pause or an edit moved the deadline. Internally the reducer keeps
+  `runningSince | null`, `accumulatedMs` and `totalMs`, and every published field holds still
+  between ticks so the state is not re-sent, and the app not re-rendered, once a second.
+- The floating bar receives a typed snapshot
+  `{ sessionId, goalTitle, intention, endsAtEpochSeconds | null, pausedRemainingSeconds | null,
+  totalSeconds, snoozed, position }` through `updateFocusBar`, and reports
+  `{ action: "pause" | "resume" | "complete" | "edit" | "move_to_menu_bar" | "moved", sessionId, x?, y? }`.
+  The deadline is an anchor: the native side runs a 1 Hz **paint-only** timer against it (invalidated
+  when the bar hides, pauses or shuts down) while the TypeScript reducer stays the only authority on
+  expiry. Actions naming a session that is no longer running are dropped, so a click that arrives
+  late can never act on a newer session. `edit` only asks the app to open its editor.
 - Foreground evidence is `browser { generation, sequence, observedAt, processIdentifier,
   bundleIdentifier, domain }` or `unknown { generation, sequence, observedAt, reason }`.
 
@@ -359,6 +450,9 @@ Key rules (`src/main/focus-state.ts`, pure and unit-tested):
   session ID and a known nudge ID, so a late click can't affect a newer session.
 - Losing capability (pause, Accessibility revoked, URL capture off, protected context) hides a
   reminder immediately. Foreground changes also hide it immediately; only a preview has an 8 s timeout.
+- Pausing a session hides any reminder, restores system grayscale, stops observation (generation 0)
+  and forgets evidence. Resuming advances the generation, so only a fresh observation can nudge.
+  A pause at or past the deadline completes the session instead of freezing an expired one.
 
 Native reminder (`native/bridge/FocusOverlay.swift`, in the existing dylib):
 
@@ -375,6 +469,25 @@ Native reminder (`native/bridge/FocusOverlay.swift`, in the existing dylib):
 - Before showing, the expected process must still be frontmost. A display disconnect hides the
   reminder immediately, a Space change fades it, and stale fade completions can't hide a newer
   reminder.
+
+Floating bar (`native/bridge/FocusBar.swift`, same dylib):
+
+- `FocusBarPanel` is its own `NSPanel` subclass, not a reuse of `FocusOverlayPanel`: it returns
+  `canBecomeKey` true so the keyboard path can work, while the reminder panels never can.
+  `isFloatingPanel` is set before the level (`statusBar` + 3, above the grayscale surface),
+  with `canJoinAllSpaces`, `fullScreenAuxiliary`, `hidesOnDeactivate` false and
+  `becomesKeyOnlyIfNeeded` true.
+- Normal shows and countdown repaints use `orderFrontRegardless` only. `focusFocusBar` is the sole
+  entry point that calls `NSApp.activate` and `makeKeyAndOrderFront`, and it is reached only from
+  an explicit **Focus Floating Bar** / **Focus the bar** request.
+- Dragging uses the window server's own drag (`performDrag(with:)`) from the capsule background;
+  the controls keep their clicks. A position is only reported when the frame actually changed.
+- Geometry is pure and unit-tested in `ActivityCore/FocusBarPlacement.swift`: the saved corner is
+  pulled fully inside whichever `visibleFrame` holds most of it, and a corner on no connected
+  display falls back to bottom centre above the Dock.
+- The capture filter in `FocusGrayscale.swift` excludes `FocusBarPanel` alongside
+  `FocusOverlayPanel`, and the collector's pointer exclusion covers the bar's frame while it is
+  visible, so bar clicks are never recorded as clicks in the app underneath.
 
 Build: `native/bridge/build.sh` uses SwiftPM's `native` build system (Swift 6.4 defaults to a
 different output layout) and links **every** `ActivityCore` object, failing if the count doesn't
@@ -394,7 +507,10 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   tagged packet arrives through the callback, carries the requested generation, contains no site
   with URL capture off, and is never written to the activity file. It also checks that malformed
   reminder requests are rejected and that a reminder for a non-frontmost process is refused before
-  any window is created. Only event kinds and reasons are printed.
+  any window is created. For the floating bar it checks that every export exists and that malformed
+  snapshots (bad JSON, no session, both running and paused, no length, an impossible position) are
+  rejected; it deliberately never sends a valid snapshot or calls `focusFocusBar`, so no panel is
+  put on screen and no focus is taken. Only event kinds and reasons are printed.
 - `sample-app-resources.sh` reads `ps` statistics only. Run it idle and during a session.
 - `npm run test:grayscale-gpu` renders synthetic pixels through the production GPU renderer and
   checks grayscale and orientation. Window geometry (Retina crops, negative display origins,
@@ -414,7 +530,21 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   edge should appear or disappear without the session restarting. Quit while a reminder is gray:
   colors should return before the app exits.
 
+- Manual checks for the floating bar (packaged app): start a session and confirm the bar appears
+  bottom centre without the app coming forward, that hovering reveals the controls without the bar
+  resizing, and that clicking pause from another app neither activates OpenHistory Focus nor takes
+  your typing focus. Drag it to another display, restart the app and start a session: it should
+  come back clamped onto a connected display. Choose **Focus Floating Bar** from the menu-bar icon
+  and Tab through the controls, then press Escape. With a listed site in front, confirm the
+  reminder still appears and that Window/Screen grayscale never contains the bar itself.
+- Manual check for the menu bar in Dock presentation: start a session and confirm a temporary icon
+  with the countdown appears, that its menu offers every session control, and that it disappears
+  when the session completes while the app stays in the Dock.
+
 Automated coverage includes domain anti-spoofing, malformed IPC and persistence, session expiry,
+pause and resume across a passed deadline, editing a running session, malformed and stale bar
+actions, the bar preference migration and position validation, menu-bar presence mapping,
+floating-bar placement clamping,
 snooze, dismiss, cooldown, re-entry, stale and out-of-order evidence, stale native actions,
 unknown evidence, stop, pause and restart, day reads well beyond 250 events, midnight privacy,
 gap labels, truncation limits, path traversal and symlinked files.
@@ -452,6 +582,13 @@ gap labels, truncation limits, path traversal and symlinked files.
   every display. A crash or force quit while it is on leaves the screen gray until the next
   launch restores the journal. Changing the amber edge replaces a visible reminder, which briefly
   restarts captured grayscale.
+- The floating bar has not been verified live yet. Its window is only as large as the capsule, but
+  whether the area just outside its rounded corners passes clicks through to the app underneath is
+  not claimed without runtime evidence: an `NSView` returning nil from `hitTest` does not by itself
+  guarantee window-level click-through. Full-screen apps, several Spaces, mixed-resolution displays
+  and physical keyboard delivery into the bar need manual verification per macOS version.
+- A session never resumes after a restart, so the bar and the temporary menu-bar icon do not come
+  back on their own either; the saved bar position does.
 - Idle time is not recorded in the timeline; only live idle suppresses reminders.
 - A day file written under a different time zone is shown under the date in its file name.
 - Chat still requires a cloud model.

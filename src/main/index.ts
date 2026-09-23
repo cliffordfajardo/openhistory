@@ -13,7 +13,7 @@ import {
   type TimelineApplication,
   type TimelineState
 } from "@shared/contracts";
-import type { FocusViewState } from "@shared/focus";
+import { focusSessionRemainingMs, type FocusViewState } from "@shared/focus";
 import {
   INFERENCE_PROVIDERS,
   isCloudInferenceProvider,
@@ -54,6 +54,7 @@ import { CollectorService } from "./collector-service";
 import { APP_IDENTITY, configureAppIdentity, getRuntimeConfig } from "./config";
 import { deleteOwnedDataDirectory, ensureOwnedDataDirectory } from "./data-directory";
 import { sanitizedDiagnostics } from "./diagnostics";
+import { focusMenuBarTitle, formatFocusCountdown, trayPresence } from "./focus-bar";
 import { FocusController } from "./focus-controller";
 import { FocusStore } from "./focus-store";
 import { SystemColorFilterController } from "./system-color-filter";
@@ -98,6 +99,9 @@ configureAppIdentity();
 
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
+/** Whether the menu-bar icon belongs to the presentation mode or only to a running session. */
+let trayOwner: "presentation" | "session" | "none" = "none";
+let focusCountdownTimer: ReturnType<typeof setInterval> | undefined;
 let appPresentationMode: AppPresentationMode = "dock";
 let isQuitting = false;
 let menuBarPositionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -392,7 +396,7 @@ function setCaptureEnabled(enabled: boolean): void {
 function toggleCollectionFromTray(): void {
   const current = settingsStore.load();
   if (!collector.enabled && current.privacyNoticeVersion < CURRENT_PRIVACY_NOTICE_VERSION) {
-    showMenuBarWindow();
+    showOpenHistoryWindow();
     return;
   }
   setCaptureEnabled(!collector.enabled);
@@ -400,7 +404,7 @@ function toggleCollectionFromTray(): void {
 }
 
 function openSettingsFromTray(): void {
-  showMenuBarWindow();
+  showOpenHistoryWindow();
   if (!mainWindow) return;
   if (mainWindow.webContents.isLoadingMainFrame()) {
     mainWindow.webContents.once("did-finish-load", () => {
@@ -414,28 +418,93 @@ function openSettingsFromTray(): void {
 function refreshTray(): void {
   if (!tray) return;
   const state = trayState();
+  const session = focus?.view().session ?? { status: "idle" as const };
   tray.setImage(trayImage(state));
   tray.setPressedImage(trayImage(state));
+  tray.setTitle(focusMenuBarTitle(session, Date.now()));
   tray.setToolTip(`${APP_IDENTITY.productName} — ${trayStateLabel(state)}`);
+}
+
+function focusTrayItems(): Electron.MenuItemConstructorOptions[] {
+  const view = focus?.view();
+  const session = view?.session;
+  if (!view || session?.status !== "active") return [];
+  const paused = session.endsAt === null;
+  const floating = view.preferences.barPresentation === "floating";
+  return [
+    { label: `Focusing: ${session.goal.title.slice(0, 40)}`, enabled: false },
+    {
+      label: `${formatFocusCountdown(focusSessionRemainingMs(session, Date.now()))} ${paused ? "left, paused" : "left"}`,
+      enabled: false
+    },
+    paused
+      ? { label: "Resume Session", click: () => { focus?.resumeSession(); } }
+      : { label: "Pause Session", click: () => { focus?.pauseSession(); } },
+    { label: "Complete Session", click: () => { focus?.stop(); } },
+    session.snoozedUntil
+      ? { label: "Resume Reminders", click: () => { focus?.resume(); } }
+      : { label: "Snooze Reminders for 5 Minutes", click: () => { focus?.snooze(); } },
+    { label: "Edit Session…", click: openFocusEditor },
+    { type: "separator" },
+    floating
+      ? { label: "Move Session to Menu Bar", click: () => { focus?.setBarPresentation("menuBar"); } }
+      : { label: "Show Floating Bar", click: () => { focus?.setBarPresentation("floating"); } },
+    {
+      label: "Focus Floating Bar",
+      enabled: view.barAvailable,
+      click: () => {
+        try {
+          focus?.focusBar();
+        } catch (error) {
+          console.error("Unable to focus the Focus bar", {
+            name: error instanceof Error ? error.name : "UnknownError"
+          });
+        }
+      }
+    },
+    { type: "separator" }
+  ];
+}
+
+function showOpenHistoryWindow(): void {
+  if (appPresentationMode === "menuBar") {
+    showMenuBarWindow();
+    return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow("dock", true);
+  else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
+function openFocusEditor(): void {
+  showOpenHistoryWindow();
+  if (!mainWindow) return;
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once("did-finish-load", () => {
+      mainWindow?.webContents.send(IPC_CHANNELS.openFocusEditor);
+    });
+  } else {
+    mainWindow.webContents.send(IPC_CHANNELS.openFocusEditor);
+  }
 }
 
 function showTrayContextMenu(): void {
   if (!tray) return;
   const state = trayState();
-  const session = focus?.view().session;
-  const focusItems: Electron.MenuItemConstructorOptions[] = session?.status === "active" ? [
-    { label: `Focusing: ${session.goal.title.slice(0, 40)}`, enabled: false },
-    session.snoozedUntil
-      ? { label: "Resume Reminders", click: () => { focus?.resume(); } }
-      : { label: "Snooze Reminders for 5 Minutes", click: () => { focus?.snooze(); } },
-    { label: "Stop Focus Session", click: () => { focus?.stop(); } },
-    { type: "separator" }
-  ] : [];
+  const windowItem: Electron.MenuItemConstructorOptions = appPresentationMode === "menuBar"
+    ? {
+      label: mainWindow?.isVisible() ? "Hide OpenHistory Focus" : "Show OpenHistory Focus",
+      click: toggleMenuBarWindow
+    }
+    : { label: "Open OpenHistory Focus", click: showOpenHistoryWindow };
   tray.popUpContextMenu(Menu.buildFromTemplate([
     { label: trayStateLabel(state), enabled: false },
     { type: "separator" },
-    ...focusItems,
-    { label: mainWindow?.isVisible() ? "Hide OpenHistory Focus" : "Show OpenHistory Focus", click: toggleMenuBarWindow },
+    ...focusTrayItems(),
+    windowItem,
     { label: collector.enabled ? "Pause Capture" : "Resume Capture", click: toggleCollectionFromTray },
     { label: "Settings…", click: openSettingsFromTray },
     { type: "separator" },
@@ -447,15 +516,51 @@ function ensureTray(): void {
   if (tray) return;
   tray = new Tray(trayImage(trayState()));
   if (process.platform === "darwin") tray.setIgnoreDoubleClickEvents(true);
-  tray.on("click", toggleMenuBarWindow);
+  tray.on("click", () => {
+    if (appPresentationMode === "menuBar") toggleMenuBarWindow();
+    else showTrayContextMenu();
+  });
   tray.on("right-click", showTrayContextMenu);
   refreshTray();
 }
 
 function destroyTray(): void {
   clearMenuBarPositionTimer();
+  stopFocusCountdown();
   tray?.destroy();
   tray = undefined;
+}
+
+function syncFocusTray(): void {
+  const presence = trayPresence(appPresentationMode, focus?.view().session.status === "active");
+  if (presence === "none") {
+    if (trayOwner === "session") destroyTray();
+    trayOwner = "none";
+    return;
+  }
+  trayOwner = presence;
+  ensureTray();
+  refreshTray();
+  syncFocusCountdown();
+}
+
+function syncFocusCountdown(): void {
+  const session = focus?.view().session;
+  const counting = Boolean(tray) && session?.status === "active" && session.endsAt !== null;
+  if (!counting) {
+    stopFocusCountdown();
+    return;
+  }
+  focusCountdownTimer ??= setInterval(() => {
+    if (tray) refreshTray();
+    else stopFocusCountdown();
+  }, 1_000);
+}
+
+function stopFocusCountdown(): void {
+  if (!focusCountdownTimer) return;
+  clearInterval(focusCountdownTimer);
+  focusCountdownTimer = undefined;
 }
 
 function recreateWindow(
@@ -480,12 +585,12 @@ function applyAppPresentationMode(mode: AppPresentationMode, showWhenReady = fal
   const showDelayMilliseconds = menuBarTransitionShowDelay(appPresentationMode, mode);
   appPresentationMode = mode;
   if (mode === "menuBar") {
-    ensureTray();
     app.dock?.hide();
   } else {
     destroyTray();
     void app.dock?.show();
   }
+  syncFocusTray();
   recreateWindow(mode, showWhenReady || mode === "dock", showDelayMilliseconds);
 }
 
@@ -645,9 +750,11 @@ async function initialize(): Promise<void> {
     binding: collector.focusSystemFilter(),
     journalPath: join(app.getPath("userData"), "focus-color-filter-restore.json")
   });
+  const focusBar = collector.focusBar();
   focus = new FocusController({
     store: new FocusStore(config.dataDirectory),
     overlay: collector.focusOverlay(),
+    ...(focusBar ? { bar: focusBar } : {}),
     screenCapture: collector.focusScreenCapture(),
     systemFilter: systemColorFilter,
     setForegroundObservation: (generation) => collector.setForegroundObservation(generation),
@@ -660,7 +767,11 @@ async function initialize(): Promise<void> {
     }),
     idleSeconds: () => powerMonitor.getSystemIdleTime()
   });
-  focus.on("state", sendFocusState);
+  focus.on("state", (state: FocusViewState) => {
+    sendFocusState(state);
+    syncFocusTray();
+  });
+  focus.on("editRequested", openFocusEditor);
   collector.on("foreground", (evidence) => focus?.handleEvidence(evidence));
   collector.on("foregroundReset", () => focus?.resetEvidence());
   inference = new InferenceService({
@@ -977,6 +1088,7 @@ async function initialize(): Promise<void> {
     });
     if (confirmation.response !== 1) return false;
     if (historyBuildPromise) await historyBuildPromise.catch(() => undefined);
+    stopFocusCountdown();
     focus?.shutdown();
     systemColorFilter?.shutdown();
     collector.stop();
@@ -1037,6 +1149,12 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.stopFocus, () => focus!.stop());
   handleTrustedIpc(IPC_CHANNELS.snoozeFocus, () => focus!.snooze());
   handleTrustedIpc(IPC_CHANNELS.resumeFocus, () => focus!.resume());
+  handleTrustedIpc(IPC_CHANNELS.pauseFocusSession, () => focus!.pauseSession());
+  handleTrustedIpc(IPC_CHANNELS.resumeFocusSession, () => focus!.resumeSession());
+  handleTrustedIpc(IPC_CHANNELS.editFocusSession, (_event, edit: unknown) => focus!.editSession(edit));
+  handleTrustedIpc(IPC_CHANNELS.setFocusBarPresentation, (_event, presentation: unknown) =>
+    focus!.setBarPresentation(presentation));
+  handleTrustedIpc(IPC_CHANNELS.focusFocusBar, () => focus!.focusBar());
   handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
   handleTrustedIpc(IPC_CHANNELS.setFocusExperience, (_event, experience: unknown) =>
     focus!.setExperience(experience));
@@ -1073,10 +1191,11 @@ async function initialize(): Promise<void> {
   });
 
   if (appPresentationMode === "menuBar") {
-    ensureTray();
     app.dock?.hide();
+    syncFocusTray();
     createWindow("menuBar", false);
   } else {
+    syncFocusTray();
     createWindow("dock", true);
   }
   if (settings.privacyNoticeVersion >= CURRENT_PRIVACY_NOTICE_VERSION && !settings.capturePaused) {
@@ -1142,6 +1261,7 @@ app.on("before-quit", () => {
   if (catchUpHistoryTimer) clearTimeout(catchUpHistoryTimer);
   if (appPresentationModeTimer) clearTimeout(appPresentationModeTimer);
   if (menuBarBlurTimer) clearTimeout(menuBarBlurTimer);
+  stopFocusCountdown();
   focus?.shutdown();
   systemColorFilter?.shutdown();
   collector?.stop();

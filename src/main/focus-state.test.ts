@@ -1,4 +1,4 @@
-import { FOCUS_TIMING } from "@shared/focus";
+import { FOCUS_TIMING, type FocusSession } from "@shared/focus";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ForegroundEvidence } from "./foreground-evidence";
@@ -721,4 +721,159 @@ test("switching between captured and system grayscale keeps the session and skip
   assert.equal(shows(toScreen)[0]?.request.experience, "grayscale_screen");
   assert.equal(systemFilterWanted(harness.state), false);
   assert.deepEqual(harness.state.session, session);
+});
+
+function activeView(state: FocusMachineState): Extract<FocusSession, { status: "active" }> {
+  const view = sessionView(state);
+  if (view.status !== "active") throw new assert.AssertionError({ message: "the session must still be active" });
+  return view;
+}
+
+test("pausing freezes the countdown past the old deadline, hides the reminder and stops watching", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  harness.browser(T0 + 1_000);
+  assert.equal(Boolean(harness.state.nudge), true);
+
+  const paused = harness.send({ type: "pause_session", now: T0 + 10 * 60_000 });
+  assert.equal(hides(paused).length, 1, "a visible reminder goes away when the session pauses");
+  assert.deepEqual(paused.at(-1), { type: "observe", generation: 0 }, "nothing is watched while paused");
+  const view = activeView(harness.state);
+  assert.equal(view.endsAt, null);
+  assert.equal(view.pausedRemainingMs, 15 * 60_000);
+  assert.equal(view.totalMs, 25 * 60_000);
+  assert.equal(foregroundSummary(harness.state, T0 + 10 * 60_000), "paused");
+
+  // Well past the deadline this session started with: the pause has to hold it open.
+  harness.send({ type: "tick", now: T0 + 40 * 60_000 });
+  assert.equal(harness.state.session.status, "active");
+  assert.equal(activeView(harness.state).pausedRemainingMs, 15 * 60_000);
+  assert.equal(shows(harness.browser(T0 + 40 * 60_000)).length, 0, "no reminder can appear while paused");
+});
+
+test("pausing hides system grayscale, and resuming needs fresh evidence before the next reminder", () => {
+  const harness = new Harness();
+  harness.state = initialFocusState(READY, "grayscale_system", "unsupported", true, true);
+  harness.start(T0, "session-a", 25);
+  harness.browser(T0 + 1_000);
+  assert.equal(systemFilterWanted(harness.state), true);
+
+  harness.send({ type: "pause_session", now: T0 + 5 * 60_000 });
+  assert.equal(systemFilterWanted(harness.state), false, "colors are given back while paused");
+  assert.equal(effectView(harness.state)?.visible, false);
+
+  const pausedGeneration = harness.generation();
+  const resumed = harness.send({ type: "resume_session", now: T0 + 60 * 60_000 });
+  const view = activeView(harness.state);
+  assert.equal(
+    view.endsAt,
+    new Date(T0 + 60 * 60_000 + 20 * 60_000).toISOString(),
+    "the twenty minutes that were left start again"
+  );
+  assert.equal(view.totalMs, 25 * 60_000, "the planned length, and so the progress made, are kept");
+  assert.equal(view.pausedRemainingMs, null);
+  assert.equal(harness.generation(), pausedGeneration + 1);
+  assert.deepEqual(resumed.at(-1), { type: "observe", generation: pausedGeneration + 1 });
+
+  const stale: ForegroundEvidence = {
+    kind: "browser",
+    generation: pausedGeneration,
+    sequence: 99,
+    observedAt: T0 + 60 * 60_000,
+    processIdentifier: 501,
+    bundleIdentifier: "com.apple.Safari",
+    domain: "video.example"
+  };
+  assert.equal(shows(harness.send({ type: "evidence", now: T0 + 60 * 60_000, evidence: stale })).length, 0);
+  assert.equal(shows(harness.browser(T0 + 60 * 60_000 + 1_000)).length, 1, "fresh evidence nudges again");
+});
+
+test("a pause at or past the deadline completes the session instead of freezing it", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  harness.send({ type: "pause_session", now: T0 + 25 * 60_000 });
+  assert.equal(harness.state.session.status, "idle");
+  assert.equal(harness.state.evidence, undefined);
+});
+
+test("a second pause or resume changes nothing, and a paused session still completes", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  harness.send({ type: "pause_session", now: T0 + 60_000 });
+  harness.send({ type: "pause_session", now: T0 + 10 * 60_000 });
+  assert.equal(activeView(harness.state).pausedRemainingMs, 24 * 60_000);
+  harness.send({ type: "resume_session", now: T0 + 10 * 60_000 });
+  harness.send({ type: "resume_session", now: T0 + 11 * 60_000 });
+  assert.equal(
+    activeView(harness.state).endsAt,
+    new Date(T0 + 10 * 60_000 + 24 * 60_000).toISOString()
+  );
+  const stopped = harness.send({ type: "stop", now: T0 + 12 * 60_000 });
+  assert.equal(harness.state.session.status, "idle");
+  assert.deepEqual(stopped.at(-1), { type: "observe", generation: 0 });
+});
+
+test("editing a session keeps its identity, elapsed progress and snooze", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  const before = activeView(harness.state);
+  harness.browser(T0 + 1_000);
+  const firstNudge = harness.state.nudge?.id;
+  harness.send({ type: "snooze", now: T0 + 2_000 });
+  const snoozedUntil = activeView(harness.state).snoozedUntil;
+
+  const edited = harness.send({
+    type: "edit_session",
+    now: T0 + 3 * 60_000,
+    goal: { ...GOAL, title: "Ship the appendix" },
+    intention: "Rewrite the summary",
+    remainingMinutes: 20
+  });
+  const after = activeView(harness.state);
+  assert.equal(after.id, before.id, "the session keeps its identity across an edit");
+  assert.equal(after.goal.title, "Ship the appendix");
+  assert.equal(after.intention, "Rewrite the summary");
+  assert.equal(after.endsAt, new Date(T0 + 23 * 60_000).toISOString());
+  assert.equal(after.totalMs, 23 * 60_000, "three minutes spent plus the twenty now asked for");
+  assert.equal(after.snoozedUntil, snoozedUntil, "an edit never clears an absolute snooze");
+  assert.equal(hides(edited).length, 0, "the snoozed reminder was already hidden");
+  assert.equal(harness.generation(), 1, "an edit does not restart observation");
+
+  harness.send({ type: "resume", now: T0 + 4 * 60_000 });
+  const reminder = shows(harness.browser(T0 + 4 * 60_000))[0];
+  assert.equal(reminder?.request.title, "Ship the appendix");
+  assert.equal(reminder?.request.message, "Back to: Rewrite the summary");
+  assert.notEqual(reminder?.request.nudgeId, firstNudge);
+});
+
+test("editing the words behind a visible reminder replaces it without waiting for the cooldown", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  const first = shows(harness.browser(T0 + 1_000))[0]!;
+  const edited = harness.send({ type: "edit_session", now: T0 + 1_500, intention: "Finish the outline" });
+  assert.deepEqual(hides(edited)[0], { type: "hide", nudgeId: first.request.nudgeId, immediate: true });
+  const replacement = shows(edited)[0];
+  assert.equal(replacement?.request.message, "Back to: Finish the outline");
+  assert.notEqual(replacement?.request.nudgeId, first.request.nudgeId);
+  assert.equal(activeView(harness.state).id, "session-a");
+});
+
+test("shortening a session below the time already spent completes it on the next check", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  harness.send({ type: "edit_session", now: T0 + 60_000, remainingMinutes: 1 });
+  assert.equal(activeView(harness.state).endsAt, new Date(T0 + 2 * 60_000).toISOString());
+  harness.send({ type: "tick", now: T0 + 2 * 60_000 });
+  assert.equal(harness.state.session.status, "idle");
+});
+
+test("editing a paused session keeps it paused with the new remaining time", () => {
+  const harness = new Harness();
+  harness.start(T0, "session-a", 25);
+  harness.send({ type: "pause_session", now: T0 + 5 * 60_000 });
+  harness.send({ type: "edit_session", now: T0 + 30 * 60_000, remainingMinutes: 10 });
+  const view = activeView(harness.state);
+  assert.equal(view.endsAt, null);
+  assert.equal(view.pausedRemainingMs, 10 * 60_000, "time spent paused is never counted as focus time");
+  assert.equal(view.totalMs, 15 * 60_000);
 });

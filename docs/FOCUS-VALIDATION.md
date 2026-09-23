@@ -111,3 +111,34 @@ browser check was inconclusive because computer control was interrupted and then
 No inbox screenshot or email text was collected for validation. Live Gmail presentation remains
 a manual verification item; automated checks cover the native policy, TypeScript boundary and
 reminder state machine, not the full browser Accessibility pipeline.
+
+## Floating Focus bar, pause and the session menu bar
+
+Validated on 23 September 2026 on macOS 26.6.2, Apple Silicon. Typechecking,
+356 TypeScript tests, 42 Swift tests, native bridge smoke, distribution and inference-preservation
+checks pass. Synthetic GPU checks still pass for grayscale orientation and scaling.
+The signed app builds and launches with the existing permissions and saved preferences.
+
+The new tests cover frozen countdowns past the original deadline, fresh observation after resume,
+pause versus snooze, effect restoration, session edits, stale native actions, transient native-show
+failures, snapshot deduplication, preference migration, tray ownership and display-position clamping.
+
+Live checks confirmed the native capsule and running countdown, keyboard entry, Tab navigation,
+pause through Space, overflow through Return, moving to menu-bar-only mode, restoring the floating
+bar and editing remaining time without restarting the session. The bar has a full-height translucent
+progress fill behind its labels and controls. Progress is derived from the same elapsed-session model
+and freezes while paused. A dark-mode contrast issue in the session editor was corrected after visual
+inspection.
+
+The user reported both amber glow and reminder card missing in the previous build and confirmed that
+restarting restored them. Source review found no confirmed cause. Existing fade completions are
+protected against superseding presentations. Preview requests succeeded, but window-only computer-use
+screenshots do not prove that a full-desktop overlay was visible. Do not treat this intermittent issue
+as fixed. If it recurs, inspect the Focus readiness/foreground status and whether Test reminder appears
+before restarting, to distinguish missing browser evidence from native presentation.
+
+Remaining live checks include dragging and restoring position across physical displays, fullscreen
+and Spaces, complete VoiceOver navigation, prolonged resource profiling, precise keyboard return on
+Escape, and combined grayscale/amber visual behavior. Automated geometry and exclusion tests are not
+substitutes for those platform checks. Computer control was intermittently interrupted by concurrent
+user interaction, so only the successful interactions above are claimed.

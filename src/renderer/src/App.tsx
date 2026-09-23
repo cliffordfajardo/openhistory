@@ -62,6 +62,7 @@ export function App(): React.JSX.Element {
     return pages.find((candidate) => candidate === saved) ?? "Focus";
   });
   const [apiKeyFocusRequest, setApiKeyFocusRequest] = useState(0);
+  const [focusEditRequest, setFocusEditRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
   const [liveActivityOpen, setLiveActivityOpen] = useState(false);
   const [chatSession, setChatSession] = useState<ChatSessionState>({
@@ -112,6 +113,10 @@ export function App(): React.JSX.Element {
       window.openHistory.onBootstrapState(setState),
       window.openHistory.onOpenSettings(() => {
         selectPage("Settings");
+      }),
+      window.openHistory.onOpenFocusEditor(() => {
+        setFocusEditRequest((current) => current + 1);
+        selectPage("Focus");
       }),
       window.openHistory.onFocusState((focus) => {
         setState((current) => current ? { ...current, focus } : current);
@@ -231,6 +236,7 @@ export function App(): React.JSX.Element {
               />
             ) : page === "Focus" ? (
               <FocusPage
+                editRequest={focusEditRequest}
                 onManageGoals={() => selectPage("Goals")}
                 onOpenSettings={() => selectPage("Settings")}
                 setState={setState}

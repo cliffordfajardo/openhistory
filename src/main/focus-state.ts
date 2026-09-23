@@ -24,6 +24,10 @@ export interface FocusCapability {
   overlayAvailable: boolean;
 }
 
+/**
+ * Elapsed time is `accumulatedMs` plus the current running stretch, so a pause freezes the
+ * countdown and a resume or an edit keeps the progress already made.
+ */
 type ActiveSession = {
   status: "active";
   id: string;
@@ -31,7 +35,12 @@ type ActiveSession = {
   intention: string;
   domains: string[];
   startedAt: number;
-  endsAt: number;
+  /** Start of the current running stretch, or null while paused. */
+  runningSince: number | null;
+  /** Elapsed time from the stretches before the current one. */
+  accumulatedMs: number;
+  /** Planned length, adjusted by edits; the session ends when the elapsed time reaches it. */
+  totalMs: number;
   snoozedUntil: number | null;
   generation: number;
 };
@@ -94,6 +103,15 @@ export type FocusInput =
   | { type: "domains_changed"; now: number; domains: string[] }
   | { type: "snooze"; now: number }
   | { type: "resume"; now: number }
+  | { type: "pause_session"; now: number }
+  | { type: "resume_session"; now: number }
+  | {
+    type: "edit_session";
+    now: number;
+    goal?: Goal;
+    intention?: string;
+    remainingMinutes?: number;
+  }
   | { type: "evidence"; now: number; evidence: ForegroundEvidence }
   | { type: "tick"; now: number; idleSeconds?: number }
   | { type: "capability"; now: number; capability: FocusCapability }
@@ -193,7 +211,9 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
         intention: input.intention,
         domains: [...input.domains],
         startedAt: now,
-        endsAt: now + input.durationMinutes * 60_000,
+        runningSince: now,
+        accumulatedMs: 0,
+        totalMs: input.durationMinutes * 60_000,
         snoozedUntil: null,
         generation: state.generationCounter
       };
@@ -223,6 +243,15 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
         state.session = { ...state.session, snoozedUntil: null };
         state.dismissedUntil = undefined;
       }
+      break;
+    case "pause_session":
+      pauseSession(state, now, effects);
+      break;
+    case "resume_session":
+      resumeSession(state, now, effects);
+      break;
+    case "edit_session":
+      editSession(state, input, effects);
       break;
     case "evidence":
       acceptEvidence(state, input.evidence, effects);
@@ -389,17 +418,71 @@ function applyOverlayAction(
   }
 }
 
+function elapsedSessionMs(session: ActiveSession, now: number): number {
+  const running = session.runningSince === null ? 0 : Math.max(0, now - session.runningSince);
+  return session.accumulatedMs + running;
+}
+
+function sessionDeadline(session: ActiveSession): number | null {
+  if (session.runningSince === null) return null;
+  return session.runningSince + Math.max(0, session.totalMs - session.accumulatedMs);
+}
+
+function pauseSession(state: FocusMachineState, now: number, effects: FocusEffect[]): void {
+  const session = state.session;
+  if (session.status !== "active" || session.runningSince === null) return;
+  const elapsed = elapsedSessionMs(session, now);
+  // At or past the deadline the session is over; evaluate() completes it instead.
+  if (elapsed >= session.totalMs) return;
+  if (state.nudge) effects.push(hideNudge(state, true));
+  state.session = { ...session, accumulatedMs: elapsed, runningSince: null };
+  state.evidence = undefined;
+  effects.push({ type: "observe", generation: 0 });
+}
+
+function resumeSession(state: FocusMachineState, now: number, effects: FocusEffect[]): void {
+  const session = state.session;
+  if (session.status !== "active" || session.runningSince !== null) return;
+  state.generationCounter += 1;
+  state.session = { ...session, runningSince: now, generation: state.generationCounter };
+  state.evidence = undefined;
+  effects.push({ type: "observe", generation: state.generationCounter });
+}
+
+function editSession(
+  state: FocusMachineState,
+  input: Extract<FocusInput, { type: "edit_session" }>,
+  effects: FocusEffect[]
+): void {
+  const session = state.session;
+  if (session.status !== "active") return;
+  const goal = input.goal ? structuredClone(input.goal) : session.goal;
+  const intention = input.intention ?? session.intention;
+  const totalMs = input.remainingMinutes === undefined
+    ? session.totalMs
+    : elapsedSessionMs(session, input.now) + input.remainingMinutes * 60_000;
+  const copyChanged = goal.title !== session.goal.title ||
+    goal.currentFocus !== session.goal.currentFocus || intention !== session.intention;
+  state.session = { ...session, goal, intention, totalMs };
+  if (copyChanged && state.nudge) {
+    effects.push(hideNudge(state, true));
+    state.restyling = true;
+  }
+}
+
 function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[]): void {
   if (state.preview && now >= state.preview.hideAt) effects.push(hidePreview(state, false));
 
   if (state.session.status !== "active") return;
-  if (now >= state.session.endsAt) {
+  const deadline = sessionDeadline(state.session);
+  if (deadline !== null && now >= deadline) {
     endSession(state, effects);
     return;
   }
   if (state.session.snoozedUntil !== null && now >= state.session.snoozedUntil) {
     state.session = { ...state.session, snoozedUntil: null };
   }
+  if (state.session.runningSince === null) return;
 
   const session = state.session;
   const ready = capabilityReady(state.capability);
@@ -507,9 +590,14 @@ function truncate(value: string, maximum: number): string {
   return normalized.length > maximum ? `${normalized.slice(0, maximum - 1)}…` : normalized;
 }
 
+/**
+ * The published session. Every field is stable between ticks — the deadline and the frozen
+ * remaining time are anchors the renderer, bar and menu bar count down from themselves.
+ */
 export function sessionView(state: FocusMachineState): FocusSession {
   const session = state.session;
   if (session.status !== "active") return { status: "idle" };
+  const deadline = sessionDeadline(session);
   return {
     status: "active",
     id: session.id,
@@ -517,13 +605,16 @@ export function sessionView(state: FocusMachineState): FocusSession {
     intention: session.intention,
     domains: [...session.domains],
     startedAt: new Date(session.startedAt).toISOString(),
-    endsAt: new Date(session.endsAt).toISOString(),
+    endsAt: deadline === null ? null : new Date(deadline).toISOString(),
+    totalMs: session.totalMs,
+    pausedRemainingMs: deadline === null ? Math.max(0, session.totalMs - session.accumulatedMs) : null,
     snoozedUntil: session.snoozedUntil === null ? null : new Date(session.snoozedUntil).toISOString()
   };
 }
 
 export function foregroundSummary(state: FocusMachineState, now: number): FocusForegroundSummary {
   if (state.session.status !== "active") return "not_watching";
+  if (state.session.runningSince === null) return "paused";
   if (state.idleSeconds >= FOCUS_TIMING.idleSuppressionSeconds) return "idle";
   if (!state.evidence) return "waiting";
   const evidence = freshEvidence(state, now);

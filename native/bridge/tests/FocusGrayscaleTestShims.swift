@@ -8,6 +8,9 @@ final class FocusOverlayPanel: NSPanel {
     }
 }
 
+/// The floating Focus bar is excluded from capture the same way the reminder panels are.
+final class FocusBarPanel: NSPanel {}
+
 struct FocusOverlayAppearance {
     let reduceMotion: Bool
     @MainActor static var current: FocusOverlayAppearance { .init(reduceMotion: true) }

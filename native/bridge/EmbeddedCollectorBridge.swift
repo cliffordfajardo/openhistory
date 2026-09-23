@@ -94,7 +94,8 @@ private final class EmbeddedCollectorHost: @unchecked Sendable {
         }
         collector.pointerExclusion = { point in
             MainActor.assumeIsolated {
-                FocusOverlayController.shared.recentlyContainsCardPoint(point)
+                FocusOverlayController.shared.recentlyContainsCardPoint(point) ||
+                    FocusBarController.shared.containsPoint(point)
             }
         }
         self.collector = collector

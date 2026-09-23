@@ -1,4 +1,11 @@
-import { FOCUS_LIMITS, type FocusExperience, type FocusPreferences, type Goal, type GoalDraft } from "@shared/focus";
+import {
+  FOCUS_LIMITS,
+  type FocusBarPosition,
+  type FocusExperience,
+  type FocusPreferences,
+  type Goal,
+  type GoalDraft
+} from "@shared/focus";
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, renameSync } from "node:fs";
 import { resolve } from "node:path";
@@ -9,7 +16,8 @@ export const DEFAULT_FOCUS_PREFERENCES: FocusPreferences = {
   domains: [],
   durationMinutes: 25,
   experience: "amber",
-  amberEdge: true
+  amberEdge: true,
+  barPresentation: "floating"
 };
 
 const MAX_FOCUS_FILE_BYTES = 512 * 1_024;
@@ -19,7 +27,8 @@ function defaultDocument(): FocusDocument {
     version: 1,
     goals: [],
     selectedGoalId: null,
-    preferences: structuredClone(DEFAULT_FOCUS_PREFERENCES)
+    preferences: structuredClone(DEFAULT_FOCUS_PREFERENCES),
+    barPosition: null
   };
 }
 
@@ -106,6 +115,11 @@ export class FocusStore {
 
   updatePreferences(changes: Partial<FocusPreferences>): FocusDocument {
     return this.write({ ...this.document, preferences: { ...this.document.preferences, ...changes } });
+  }
+
+  /** Where the person last left the floating bar; cleared with the rest of the local data. */
+  saveBarPosition(position: FocusBarPosition | null): FocusDocument {
+    return this.write({ ...this.document, barPosition: position });
   }
 
   private write(next: FocusDocument): FocusDocument {

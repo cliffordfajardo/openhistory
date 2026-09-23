@@ -3,6 +3,8 @@ import {
   FOCUS_DURATION_PRESETS,
   FOCUS_LIMITS,
   FOCUS_TIMING,
+  focusSessionProgress,
+  focusSessionRemainingMs,
   parseFocusDomain,
   type FocusDetectionState,
   type FocusEffectFallbackReason,
@@ -55,6 +57,7 @@ const DETECTION_COPY: Record<FocusDetectionState, { label: string; detail: strin
 
 const FOREGROUND_COPY: Record<FocusForegroundSummary, string> = {
   not_watching: "Not watching — no session is running.",
+  paused: "Paused — the countdown is frozen and nothing is watched until you resume.",
   waiting: "Waiting for the first check…",
   listed_site: "A listed site is in front.",
   other_site: "A browser is in front on a site that isn't listed.",
@@ -119,17 +122,31 @@ function effectStatusCopy(effect: FocusEffectState, amberEdge: boolean): string 
 }
 
 export function FocusPage({
+  editRequest,
   onManageGoals,
   onOpenSettings,
   setState,
   state
 }: {
+  /** Counter raised when the bar or the menu bar asks for the session editor. */
+  editRequest: number;
   onManageGoals: () => void;
   onOpenSettings: () => void;
   setState: SetAppState;
   state: BootstrapState;
 }): React.JSX.Element {
   const focus = state.focus;
+  const [editing, setEditing] = useState(false);
+  const active = focus.session.status === "active";
+
+  useEffect(() => {
+    if (!active) setEditing(false);
+  }, [active]);
+
+  useEffect(() => {
+    if (editRequest > 0) setEditing(true);
+  }, [editRequest]);
+
   return (
     <section className="page-stack focus-page" aria-label="Focus">
       {focus.recoveredFromInvalidFile ? (
@@ -137,9 +154,10 @@ export function FocusPage({
           Your saved goals couldn’t be read, so Focus started fresh. The unreadable file was kept beside the new one in your data folder.
         </div>
       ) : null}
-      {focus.session.status === "active"
-        ? <ActiveSessionCard focus={focus} setState={setState} />
+      {active
+        ? <ActiveSessionCard editing={editing} focus={focus} setEditing={setEditing} setState={setState} />
         : <StartSessionCard focus={focus} onManageGoals={onManageGoals} setState={setState} />}
+      <SessionDisplayCard focus={focus} setState={setState} />
       <DistractingSitesCard focus={focus} setState={setState} />
       <ReminderStyleCard focus={focus} setState={setState} />
       <DetectionCard focus={focus} onOpenSettings={onOpenSettings} setState={setState} state={state} />
@@ -315,21 +333,24 @@ function StartSessionCard({
 }
 
 function ActiveSessionCard({
+  editing,
   focus,
+  setEditing,
   setState
 }: {
+  editing: boolean;
   focus: FocusViewState;
+  setEditing: (editing: boolean) => void;
   setState: SetAppState;
 }): React.JSX.Element {
   const session = focus.session.status === "active" ? focus.session : undefined;
-  const now = useNow(Boolean(session));
+  const paused = session?.endsAt === null;
+  const now = useNow(Boolean(session) && !paused);
   const [error, setError] = useState<string>();
   const [previewMessage, setPreviewMessage] = useState<string>();
   if (!session) return <></>;
-  const startedAt = Date.parse(session.startedAt);
-  const endsAt = Date.parse(session.endsAt);
-  const remaining = endsAt - now;
-  const progress = Math.min(1, Math.max(0, (now - startedAt) / Math.max(1, endsAt - startedAt)));
+  const remaining = focusSessionRemainingMs(session, now);
+  const progress = focusSessionProgress(session, now);
   const snoozedUntil = session.snoozedUntil ? Date.parse(session.snoozedUntil) : undefined;
   const snoozed = snoozedUntil !== undefined && snoozedUntil > now;
 
@@ -345,8 +366,10 @@ function ActiveSessionCard({
   return (
     <div className="card focus-hero is-active">
       <div className="focus-active-heading">
-        <span className="eyebrow focus-eyebrow">Focusing</span>
-        <span className="focus-ends">Ends at {formatClock(endsAt)}</span>
+        <span className="eyebrow focus-eyebrow">{paused ? "Paused" : "Focusing"}</span>
+        <span className="focus-ends">
+          {session.endsAt === null ? "Countdown frozen" : `Ends at ${formatClock(session.endsAt)}`}
+        </span>
       </div>
       <div className="focus-remaining" aria-label={`${formatRemaining(remaining)} remaining`}>
         {formatRemaining(remaining)}
@@ -370,8 +393,25 @@ function ActiveSessionCard({
       ) : null}
       {error ? <InlineError>{error}</InlineError> : null}
       <div className="focus-actions">
-        <button className="primary-button" onClick={() => void run(() => window.openHistory.stopFocus())} type="button">
-          Stop session
+        {paused ? (
+          <button className="primary-button" onClick={() => void run(() => window.openHistory.resumeFocusSession())} type="button">
+            Resume session
+          </button>
+        ) : (
+          <button className="primary-button" onClick={() => void run(() => window.openHistory.pauseFocusSession())} type="button">
+            Pause session
+          </button>
+        )}
+        <button className="secondary-button" onClick={() => void run(() => window.openHistory.stopFocus())} type="button">
+          Complete session
+        </button>
+        <button
+          aria-expanded={editing}
+          className="secondary-button"
+          onClick={() => setEditing(!editing)}
+          type="button"
+        >
+          {editing ? "Close edit" : "Edit session"}
         </button>
         {snoozed ? (
           <button className="secondary-button" onClick={() => void run(() => window.openHistory.resumeFocus())} type="button">
@@ -384,10 +424,166 @@ function ActiveSessionCard({
         )}
         <button className="secondary-button" onClick={() => void preview()} type="button">Test reminder</button>
       </div>
+      {editing ? <EditSessionForm focus={focus} onDone={() => setEditing(false)} setState={setState} /> : null}
       {previewMessage ? <p className="focus-quiet" role="status">{previewMessage}</p> : null}
       <p className="focus-honest-note">
-        Watching {session.domains.length} {session.domains.length === 1 ? "site" : "sites"}. Reminders are gentle and never block anything. Sessions don’t resume after the app restarts.
+        Watching {session.domains.length} {session.domains.length === 1 ? "site" : "sites"}. Pausing freezes the countdown and stops reminders; snooze only quiets reminders while the clock keeps running. Sessions don’t resume after the app restarts.
       </p>
+    </div>
+  );
+}
+
+function EditSessionForm({
+  focus,
+  onDone,
+  setState
+}: {
+  focus: FocusViewState;
+  onDone: () => void;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const session = focus.session.status === "active" ? focus.session : undefined;
+  const remainingMinutes = session
+    ? Math.max(FOCUS_LIMITS.minimumRemainingMinutes, Math.round(focusSessionRemainingMs(session, Date.now()) / 60_000))
+    : FOCUS_LIMITS.minimumRemainingMinutes;
+  const [goalId, setGoalId] = useState(
+    focus.session.status === "active" ? focus.session.goal.id : focus.selectedGoalId ?? ""
+  );
+  const [intention, setIntention] = useState(session?.intention ?? "");
+  const [minutes, setMinutes] = useState(String(remainingMinutes));
+  const [minutesEdited, setMinutesEdited] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (!session) return <></>;
+
+  const minutesValue = Number(minutes);
+  const minutesValid = Number.isInteger(minutesValue) &&
+    minutesValue >= FOCUS_LIMITS.minimumRemainingMinutes &&
+    minutesValue <= FOCUS_LIMITS.maximumDurationMinutes;
+
+  async function save(): Promise<void> {
+    if (!session || !minutesValid) return;
+    setBusy(true);
+    const failure = await focusAction(setState, () => window.openHistory.editFocusSession({
+      ...(goalId && goalId !== session.goal.id ? { goalId } : {}),
+      intention,
+      ...(minutesEdited ? { remainingMinutes: minutesValue } : {})
+    }));
+    setBusy(false);
+    setError(failure);
+    if (!failure) onDone();
+  }
+
+  return (
+    <form
+      className="focus-edit-session"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void save();
+      }}
+    >
+      <div className="focus-field">
+        <label htmlFor="focus-edit-goal">Goal</label>
+        <select id="focus-edit-goal" onChange={(event) => setGoalId(event.target.value)} value={goalId}>
+          {focus.goals.some((goal) => goal.id === session.goal.id) ? null : (
+            <option value={session.goal.id}>{session.goal.title} (deleted)</option>
+          )}
+          {focus.goals.map((goal) => <option key={goal.id} value={goal.id}>{goal.title}</option>)}
+        </select>
+      </div>
+      <div className="focus-field">
+        <label htmlFor="focus-edit-intention">This session, I’ll…</label>
+        <textarea
+          id="focus-edit-intention"
+          maxLength={FOCUS_LIMITS.intention}
+          onChange={(event) => setIntention(event.target.value)}
+          rows={2}
+          value={intention}
+        />
+      </div>
+      <label className="focus-custom-duration">
+        <span>Minutes left</span>
+        <input
+          aria-label="Minutes left in this session"
+          inputMode="numeric"
+          max={FOCUS_LIMITS.maximumDurationMinutes}
+          min={FOCUS_LIMITS.minimumRemainingMinutes}
+          onChange={(event) => { setMinutes(event.target.value); setMinutesEdited(true); }}
+          type="number"
+          value={minutes}
+        />
+        {!minutesValid ? (
+          <small>Choose {FOCUS_LIMITS.minimumRemainingMinutes}–{FOCUS_LIMITS.maximumDurationMinutes} minutes.</small>
+        ) : null}
+      </label>
+      {error ? <InlineError>{error}</InlineError> : null}
+      <div className="focus-actions">
+        <button className="primary-button" disabled={busy || !minutesValid} type="submit">Save changes</button>
+        <button className="secondary-button" onClick={onDone} type="button">Cancel</button>
+      </div>
+      <p className="focus-quiet">
+        Only change the time if you want a new countdown. Your saved goal stays unchanged.
+      </p>
+    </form>
+  );
+}
+
+function SessionDisplayCard({
+  focus,
+  setState
+}: {
+  focus: FocusViewState;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const [error, setError] = useState<string>();
+  const presentation = focus.preferences.barPresentation;
+  const active = focus.session.status === "active";
+
+  async function run(action: () => Promise<FocusViewState>): Promise<void> {
+    setError(await focusAction(setState, action));
+  }
+
+  return (
+    <div className="card focus-display">
+      <div className="focus-card-heading">
+        <div>
+          <strong>While a session runs</strong>
+          <span>The menu-bar icon always shows the countdown and every session control. The floating bar is an optional second place for them.</span>
+        </div>
+      </div>
+      <div className="focus-style-options" role="radiogroup" aria-label="Where to show the running session">
+        {([
+          ["floating", "Floating bar", "A small bar above the Dock with the goal, countdown, pause and complete. Drag it anywhere; its place is remembered."],
+          ["menuBar", "Menu bar only", "No floating bar. The countdown and controls stay in the menu-bar icon."]
+        ] as const).map(([option, label, detail]) => (
+          <button
+            aria-checked={presentation === option}
+            className={presentation === option ? "focus-style-option active" : "focus-style-option"}
+            disabled={option === "floating" && !focus.barAvailable}
+            key={option}
+            onClick={() => void run(() => window.openHistory.setFocusBarPresentation(option))}
+            role="radio"
+            type="button"
+          >
+            <strong>{label}</strong>
+            <span>{detail}</span>
+          </button>
+        ))}
+      </div>
+      {!focus.barAvailable ? (
+        <p className="focus-quiet">This build has no native floating bar, so the menu bar carries the session.</p>
+      ) : null}
+      {active && presentation === "floating" && focus.barAvailable ? (
+        <div className="focus-actions">
+          <button className="secondary-button" onClick={() => void run(() => window.openHistory.focusFocusBar())} type="button">
+            Focus the bar
+          </button>
+        </div>
+      ) : null}
+      <p className="focus-quiet">
+        Keyboard: use <strong>Focus the bar</strong> above, or <strong>Focus Floating Bar</strong> in the menu-bar icon, to move focus into the bar. Then Tab between its controls, press Space or Return to use one, and press Escape to hand the keyboard back. Hovering or focusing the bar reveals pause, complete and its overflow menu; drag the bar itself to move it.
+      </p>
+      {error ? <InlineError>{error}</InlineError> : null}
     </div>
   );
 }

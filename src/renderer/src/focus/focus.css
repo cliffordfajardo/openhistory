@@ -73,8 +73,10 @@
 .focus-site-form { display: flex; gap: 8px; }
 .focus-site-form input { flex: 1; min-width: 0; }
 
-.focus-style { display: grid; gap: 12px; padding: 16px 18px; }
+.focus-style, .focus-display { display: grid; gap: 12px; padding: 16px 18px; }
 .focus-style-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.focus-display .focus-style-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.focus-edit-session { display: grid; gap: 12px; padding: 14px; background: rgba(255, 255, 255, .4); border: 1px solid rgba(0, 0, 0, .08); border-radius: 10px; }
 .focus-edge-toggle { display: flex; align-items: flex-start; gap: 8px; }
 .focus-edge-toggle input { margin: 2px 0 0; accent-color: var(--focus-amber); }
 .focus-edge-toggle span { display: grid; gap: 2px; }
@@ -173,6 +175,7 @@
   .focus-edge-toggle strong { color: #e5e5e5; }
   .focus-edge-toggle small { color: #a5a5a5; }
   .focus-progress { background: rgba(255, 255, 255, .1); }
+  .focus-edit-session { background: rgba(0, 0, 0, .12); border-color: rgba(255, 255, 255, .1); }
   .activity-day-step { color: #ccc; background: rgba(255, 255, 255, .06); border-color: rgba(238, 238, 238, .12); }
   .activity-day-list li { border-bottom-color: rgba(238, 238, 238, .08); }
   .activity-day-copy span, .activity-day-list time { color: #a5a5a5; }

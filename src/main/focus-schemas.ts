@@ -1,9 +1,13 @@
 import {
+  FOCUS_BAR_PRESENTATIONS,
   FOCUS_EXPERIENCES,
   FOCUS_LIMITS,
   parseFocusDomain,
+  type FocusBarPosition,
+  type FocusBarPresentation,
   type FocusExperience,
   type FocusPreferences,
+  type FocusSessionEdit,
   type FocusStartRequest,
   type GoalDraft
 } from "@shared/focus";
@@ -60,6 +64,33 @@ const DomainRuleSchema = z.string().max(2_048).transform((value, context) => {
 
 export const FocusExperienceSchema: z.ZodType<FocusExperience> = z.enum(FOCUS_EXPERIENCES);
 
+export const FocusBarPresentationSchema: z.ZodType<FocusBarPresentation> = z.enum(FOCUS_BAR_PRESENTATIONS);
+
+/**
+ * A saved bar position. Screens can sit far from the origin, so the range is generous; a position
+ * that no longer lands on a connected display is clamped when the bar is shown, not rejected here.
+ */
+const BarCoordinateSchema = z.number().finite().min(-200_000).max(200_000)
+  .transform((value) => Math.round(value));
+
+export const FocusBarPositionSchema: z.ZodType<FocusBarPosition> = z.object({
+  x: BarCoordinateSchema,
+  y: BarCoordinateSchema
+}).strict();
+
+/** Renderer or bar edit of the running session. Every field is optional and applied on its own. */
+export const FocusSessionEditSchema: z.ZodType<FocusSessionEdit> = z.object({
+  goalId: GoalIdSchema.optional(),
+  intention: multiLine(FOCUS_LIMITS.intention).optional(),
+  remainingMinutes: z.number().int()
+    .min(FOCUS_LIMITS.minimumRemainingMinutes)
+    .max(FOCUS_LIMITS.maximumDurationMinutes)
+    .optional()
+}).strict().refine(
+  (value) => value.goalId !== undefined || value.intention !== undefined || value.remainingMinutes !== undefined,
+  { message: "Change the goal, the intention or the remaining minutes" }
+);
+
 const DomainListSchema = z.array(DomainRuleSchema)
   .max(FOCUS_LIMITS.domains)
   .transform((domains) => [...new Set(domains)].sort());
@@ -78,7 +109,9 @@ export const FocusPreferencesSchema: z.ZodType<FocusPreferences> = z.preprocess(
   domains: DomainListSchema,
   durationMinutes: DurationMinutesSchema,
   experience: FocusExperienceSchema.default("amber"),
-  amberEdge: z.boolean()
+  amberEdge: z.boolean(),
+  /** Files written before the floating bar existed get it, matching a fresh install. */
+  barPresentation: FocusBarPresentationSchema.default("floating")
 }).strict());
 
 /** Renderer input. An omitted `experience` keeps the saved one instead of resetting it. */
@@ -98,7 +131,8 @@ export const FocusDocumentSchema = z.object({
   version: z.literal(1),
   goals: z.array(GoalSchema).max(FOCUS_LIMITS.goals),
   selectedGoalId: GoalIdSchema.nullable(),
-  preferences: FocusPreferencesSchema
+  preferences: FocusPreferencesSchema,
+  barPosition: FocusBarPositionSchema.nullable().default(null)
 }).strict().superRefine((document, context) => {
   const ids = new Set<string>();
   for (const goal of document.goals) {

@@ -452,15 +452,17 @@ final class FocusGrayscaleController {
         }
     }
 
-    /// Exclude this app's overlay panels (grayscale surface, amber edge and card) while retaining
-    /// its normal visible windows, so nothing the reminder draws is captured back into it.
+    /// Exclude this app's overlay panels (grayscale surface, amber edge and card) and the floating
+    /// Focus bar while retaining its normal visible windows, so nothing this app draws over the
+    /// gray image is captured back into it.
     private static func contentFilter(display: SCDisplay, content: SCShareableContent) -> SCContentFilter? {
         let processIdentifier = ProcessInfo.processInfo.processIdentifier
         guard let application = content.applications.first(where: { $0.processID == processIdentifier }) else {
             return nil
         }
         let hostWindowNumbers = Set(NSApp.windows.compactMap { window -> CGWindowID? in
-            guard !(window is FocusOverlayPanel), window.isVisible, window.windowNumber > 0 else { return nil }
+            guard !(window is FocusOverlayPanel), !(window is FocusBarPanel),
+                  window.isVisible, window.windowNumber > 0 else { return nil }
             return CGWindowID(window.windowNumber)
         })
         let hostWindows = content.windows.filter {

@@ -5,8 +5,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
+import type { FocusBarShowResult, FocusBarSnapshot } from "./focus-bar";
 import {
   FocusController,
+  type FocusBarBinding,
   type FocusOverlayBinding,
   type FocusOverlayRequest,
   type FocusOverlayShowResult,
@@ -35,6 +37,31 @@ class FakeOverlay implements FocusOverlayBinding {
 
   hide(nudgeId: string, immediate: boolean): void {
     this.hidden.push({ nudgeId, immediate });
+  }
+
+  setActionHandler(handler: ((line: string) => void) | null): void {
+    this.handler = handler;
+  }
+}
+
+class FakeBar implements FocusBarBinding {
+  snapshots: FocusBarSnapshot[] = [];
+  hides = 0;
+  focuses = 0;
+  handler: ((line: string) => void) | null = null;
+  result: FocusBarShowResult = "shown";
+
+  update(snapshot: FocusBarSnapshot): FocusBarShowResult {
+    this.snapshots.push(snapshot);
+    return this.result;
+  }
+
+  hide(): void {
+    this.hides += 1;
+  }
+
+  focus(): void {
+    this.focuses += 1;
   }
 
   setActionHandler(handler: ((line: string) => void) | null): void {
@@ -80,6 +107,7 @@ class ManualTimers {
 interface Fixture {
   controller: FocusController;
   overlay: FakeOverlay;
+  bar: FakeBar;
   timers: ManualTimers;
   observations: number[];
   clock: { now: number };
@@ -98,6 +126,7 @@ async function fixture(
 ): Promise<Fixture> {
   const dataDirectory = directory ?? await testDirectory(context);
   const overlay = new FakeOverlay();
+  const bar = new FakeBar();
   const timers = new ManualTimers();
   const observations: number[] = [];
   const clock = { now: 1_800_000_000_000 };
@@ -113,6 +142,7 @@ async function fixture(
   const controller = new FocusController({
     store,
     overlay,
+    bar,
     screenCapture,
     ...(systemFilter ? { systemFilter } : {}),
     setForegroundObservation: (generation) => observations.push(generation),
@@ -127,7 +157,8 @@ async function fixture(
   controller.on("state", (state: FocusViewState) => states.push(state));
   context.after(() => controller.shutdown());
   return {
-    controller, overlay, timers, observations, clock, capability, states, store, directory: dataDirectory, screenCapture
+    controller, overlay, bar, timers, observations, clock, capability, states, store,
+    directory: dataDirectory, screenCapture
   };
 }
 
@@ -801,4 +832,250 @@ test("restore colors during a preview keeps it from turning grayscale back on", 
   f.timers.tick();
   assert.equal(f.controller.view().effect?.visible, false);
   assert.equal(f.filters.writes.length, 2, "ending the preview has nothing left to restore");
+});
+
+test("the floating bar follows the session and is not repainted from the main process each second", async (context) => {
+  const f = await fixture(context);
+  assert.equal(f.bar.snapshots.length, 0, "no bar without a session");
+  assert.equal(f.controller.view().barAvailable, true);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 });
+  const first = f.bar.snapshots.at(-1)!;
+  assert.deepEqual(
+    [first.sessionId, first.goalTitle, first.pausedRemainingSeconds, first.totalSeconds, first.position],
+    ["session-fixed", "Ship the guide", null, 1_500, null]
+  );
+  assert.equal(first.endsAtEpochSeconds, Math.round((f.clock.now + 25 * 60_000) / 1_000));
+
+  const sent = f.bar.snapshots.length;
+  for (let index = 0; index < 5; index += 1) {
+    f.clock.now += 1_000;
+    f.timers.tick();
+  }
+  assert.equal(f.bar.snapshots.length, sent, "the countdown itself never re-sends a snapshot");
+
+  f.controller.stop();
+  assert.equal(f.bar.hides, 1, "completing the session removes the bar");
+  f.controller.stop();
+  assert.equal(f.bar.hides, 1, "an already hidden bar is not hidden again");
+});
+
+test("the bar preference decides whether the floating bar is shown at all", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.setBarPresentation("menuBar");
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  assert.deepEqual(f.bar.snapshots, [], "menu-bar only keeps the floating bar away");
+  assert.equal(f.controller.view().preferences.barPresentation, "menuBar");
+
+  f.controller.setBarPresentation("floating");
+  assert.equal(f.bar.snapshots.length, 1, "switching back shows the same session");
+  const session = f.controller.view().session;
+  assert.equal(session.status === "active" ? session.id : "", "session-fixed");
+  for (const value of [undefined, null, "hud", 1, { barPresentation: "floating" }]) {
+    assert.throws(() => f.controller.setBarPresentation(value));
+  }
+  const restarted = await fixture(context, f.directory);
+  assert.equal(restarted.controller.view().preferences.barPresentation, "floating");
+});
+
+test("pausing from the bar freezes the session, restores colors and stops reminders", async (context) => {
+  const f = await systemSession(context);
+  evidence(f);
+  assert.deepEqual(f.filters.settings, GRAY);
+  const shown = f.bar.snapshots.at(-1)!;
+  assert.equal(shown.pausedRemainingSeconds, null);
+
+  f.bar.handler!(JSON.stringify({ action: "pause", sessionId: "session-fixed" }));
+  assert.deepEqual(f.filters.settings, { enabled: false, type: 2 }, "a pause gives the colors back");
+  assert.equal(f.overlay.hidden.at(-1)?.immediate, true);
+  assert.equal(f.observations.at(-1), 0, "nothing is watched while paused");
+  const paused = f.bar.snapshots.at(-1)!;
+  assert.equal(paused.endsAtEpochSeconds, null);
+  assert.equal(paused.pausedRemainingSeconds, 1_499);
+  assert.equal(f.controller.view().foreground, "paused");
+
+  const shownBefore = f.overlay.shown.length;
+  f.clock.now += 30 * 60_000;
+  f.timers.tick();
+  evidence(f, "video.example", 40);
+  assert.equal(f.controller.view().session.status, "active", "a paused session outlives its first deadline");
+  assert.equal(f.overlay.shown.length, shownBefore, "no reminder while paused");
+
+  f.bar.handler!(JSON.stringify({ action: "resume", sessionId: "session-fixed" }));
+  assert.equal(f.observations.at(-1), 2, "resuming asks for a new observation generation");
+  evidence(f, "video.example", 1);
+  assert.equal(f.overlay.shown.length, shownBefore + 1, "fresh evidence nudges again after resuming");
+});
+
+test("bar actions complete, edit and move the session, and stale or malformed ones are dropped", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  let editRequests = 0;
+  f.controller.on("editRequested", () => { editRequests += 1; });
+
+  for (const line of [
+    "not json",
+    "{}",
+    JSON.stringify({ action: "explode", sessionId: "session-fixed" }),
+    JSON.stringify({ action: "pause" }),
+    JSON.stringify({ action: "pause", sessionId: "session-other" }),
+    JSON.stringify({ action: "complete", sessionId: "session-fixed", extra: true }),
+    JSON.stringify({ action: "moved", sessionId: "session-fixed", x: Number.MAX_VALUE, y: 0 }),
+    JSON.stringify({ action: "moved", sessionId: "session-fixed", x: 10 })
+  ]) {
+    f.bar.handler!(line);
+  }
+  assert.equal(f.controller.view().session.status, "active", "no malformed line touches the session");
+  assert.equal(f.controller.view().barPosition, null);
+  assert.equal(editRequests, 0);
+
+  f.bar.handler!(JSON.stringify({ action: "moved", sessionId: "session-fixed", x: 120.6, y: 88 }));
+  assert.deepEqual(f.controller.view().barPosition, { x: 121, y: 88 });
+  f.bar.handler!(JSON.stringify({ action: "edit", sessionId: "session-fixed" }));
+  assert.equal(editRequests, 1, "the bar asks the app to open the editor instead of editing itself");
+  f.bar.handler!(JSON.stringify({ action: "move_to_menu_bar", sessionId: "session-fixed" }));
+  assert.equal(f.controller.view().preferences.barPresentation, "menuBar");
+  assert.equal(f.bar.hides, 1);
+
+  f.bar.handler!(JSON.stringify({ action: "complete", sessionId: "session-fixed" }));
+  assert.equal(f.controller.view().session.status, "idle");
+  assert.equal(f.observations.at(-1), 0);
+
+  const restarted = await fixture(context, f.directory);
+  assert.deepEqual(restarted.controller.view().barPosition, { x: 121, y: 88 },
+    "the saved place is remembered for the next session");
+  restarted.controller.setBarPresentation("floating");
+  restarted.controller.start({
+    goalId: restarted.controller.view().goals[0]!.id,
+    intention: "",
+    durationMinutes: 25
+  });
+  assert.deepEqual(restarted.bar.snapshots.at(-1)?.position, { x: 121, y: 88 });
+});
+
+test("a bar click that arrives after its session ended cannot affect the next one", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.controller.stop();
+  f.bar.handler!(JSON.stringify({ action: "pause", sessionId: "session-fixed" }));
+  assert.equal(f.controller.view().session.status, "idle", "a late click never starts anything");
+
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.bar.handler!(JSON.stringify({ action: "pause", sessionId: "session-earlier" }));
+  const session = f.controller.view().session;
+  assert.equal(session.status === "active" ? session.endsAt !== null : false, true, "the new session keeps running");
+});
+
+test("editing the running session keeps it and never rewrites the goal", async (context) => {
+  const f = await fixture(context);
+  const first = readyToStart(f);
+  const second = f.controller.saveGoal({ title: "Second goal", why: "", currentFocus: "Draft" }).goals
+    .find((goal) => goal.id !== first)!.id;
+  const started = f.controller.start({ goalId: first, intention: "Write the intro", durationMinutes: 25 }).session;
+  f.clock.now += 5 * 60_000;
+
+  const edited = f.controller.editSession({
+    goalId: second,
+    intention: "Draft section two",
+    remainingMinutes: 10
+  }).session;
+  if (started.status !== "active" || edited.status !== "active") assert.fail("the session must remain active");
+  assert.equal(edited.id, started.id);
+  assert.equal(edited.goal.id, second);
+  assert.equal(edited.intention, "Draft section two");
+  assert.equal(edited.endsAt, new Date(f.clock.now + 10 * 60_000).toISOString());
+  assert.equal(edited.totalMs, 15 * 60_000);
+  assert.equal(f.controller.view().selectedGoalId, second, "editing selects the goal it now points at");
+  assert.deepEqual(f.store.goal(second), { id: second, title: "Second goal", why: "", currentFocus: "Draft" },
+    "the stored goal itself is untouched");
+  assert.deepEqual(f.observations, [1], "an edit never restarts observation");
+  assert.equal(f.bar.snapshots.at(-1)?.goalTitle, "Second goal");
+
+  for (const value of [undefined, null, {}, { intention: "x", extra: 1 }, { remainingMinutes: 0 },
+    { remainingMinutes: 241 }, { remainingMinutes: 5.5 }, { goalId: "goal-missing-00000000" }]) {
+    assert.throws(() => f.controller.editSession(value), Error, JSON.stringify(value));
+  }
+  assert.equal(f.controller.editSession({ remainingMinutes: 1 }).session.status, "active",
+    "a running session can be shortened to a single minute");
+});
+
+test("a deleted goal leaves the session editable through its remaining fields", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  const spare = f.controller.saveGoal({ title: "Spare", why: "", currentFocus: "" }).goals
+    .find((goal) => goal.id !== goalId)!.id;
+  f.controller.start({ goalId, intention: "Write the intro", durationMinutes: 25 });
+  f.controller.deleteGoal(goalId);
+  const session = f.controller.view().session;
+  assert.equal(session.status === "active" ? session.goal.id : "", goalId, "the session keeps its own snapshot");
+
+  const edited = f.controller.editSession({ intention: "Keep going" }).session;
+  assert.equal(edited.status === "active" ? edited.goal.id : "", goalId);
+  assert.equal(edited.status === "active" ? edited.intention : "", "Keep going");
+  assert.equal(f.controller.editSession({ goalId: spare }).session.status, "active");
+  assert.throws(() => f.controller.editSession({ goalId }), /existing goal/);
+});
+
+test("editing needs a running session, and the bar can only be focused during one", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  assert.throws(() => f.controller.editSession({ intention: "Nothing to edit" }), /No focus session/);
+  assert.throws(() => f.controller.focusBar(), /No focus session/);
+  f.controller.setBarPresentation("menuBar");
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.controller.focusBar();
+  assert.equal(f.bar.focuses, 1);
+  assert.equal(f.controller.view().preferences.barPresentation, "floating",
+    "asking for the bar by keyboard brings it back");
+  assert.equal(f.bar.snapshots.length, 1);
+});
+
+test("a build without the native bar keeps the session in the menu bar", async (context) => {
+  const directory = await testDirectory(context);
+  const controller = new FocusController({
+    store: new FocusStore(directory, () => "goal-00000001-test"),
+    overlay: new FakeOverlay(),
+    setForegroundObservation: () => undefined,
+    capability: () => ({
+      privacyAccepted: true,
+      captureEnabled: true,
+      collectorAvailable: true,
+      accessibilityTrusted: true,
+      captureBrowserURLs: true
+    }),
+    timers: new ManualTimers()
+  });
+  context.after(() => controller.shutdown());
+  const goalId = controller.saveGoal({ title: "Goal", why: "", currentFocus: "" }).goals[0]!.id;
+  controller.savePreferences({ domains: ["video.example"], durationMinutes: 25 });
+  assert.equal(controller.view().barAvailable, false);
+  assert.throws(() => controller.focusBar(), /isn't available/);
+  assert.equal(controller.start({ goalId, intention: "", durationMinutes: 25 }).session.status, "active");
+});
+
+test("shutdown hides the bar and detaches its handler", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.controller.shutdown();
+  assert.equal(f.bar.hides, 1);
+  assert.equal(f.bar.handler, null);
+});
+
+
+test("a transient native bar failure retries on the next session tick", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.bar.result = "no_display";
+  f.controller.start({ goalId, intention: "Keep going", durationMinutes: 25 });
+  const attempts = f.bar.snapshots.length;
+  f.bar.result = "shown";
+  f.clock.now += 1_000;
+  f.timers.tick();
+  assert.equal(f.bar.snapshots.length, attempts + 1);
+  f.timers.tick();
+  assert.equal(f.bar.snapshots.length, attempts + 1);
 });

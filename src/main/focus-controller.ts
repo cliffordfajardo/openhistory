@@ -3,6 +3,7 @@ import type {
   FocusExperience,
   FocusScreenCaptureAccess,
   FocusViewState,
+  Goal,
   GoalDraft
 } from "@shared/focus";
 import { randomUUID } from "node:crypto";
@@ -10,8 +11,17 @@ import { EventEmitter } from "node:events";
 import { z } from "zod";
 import type { ForegroundEvidence } from "./foreground-evidence";
 import {
+  FocusBarActionSchema,
+  focusBarSnapshot,
+  type FocusBarShowResult,
+  type FocusBarSnapshot
+} from "./focus-bar";
+import {
+  FocusBarPositionSchema,
+  FocusBarPresentationSchema,
   FocusExperienceSchema,
   FocusPreferencesInputSchema,
+  FocusSessionEditSchema,
   FocusStartRequestSchema,
   GoalDraftSchema,
   GoalIdSchema,
@@ -70,6 +80,15 @@ export interface FocusOverlayBinding {
   setActionHandler(handler: ((line: string) => void) | null): void;
 }
 
+/** The native floating bar: one compact panel that shows the running session. */
+export interface FocusBarBinding {
+  update(snapshot: FocusBarSnapshot): FocusBarShowResult;
+  hide(): void;
+  /** Makes the bar key so its controls can be reached from the keyboard. Only for explicit asks. */
+  focus(): void;
+  setActionHandler(handler: ((line: string) => void) | null): void;
+}
+
 /** macOS Screen Recording access. `access` never prompts; `request` may show the system prompt once. */
 export interface FocusScreenCaptureBinding {
   access(): boolean;
@@ -79,6 +98,8 @@ export interface FocusScreenCaptureBinding {
 export interface FocusControllerOptions {
   store: FocusStore;
   overlay: FocusOverlayBinding | undefined;
+  /** Absent where the native bridge predates the floating bar; the menu bar then carries it. */
+  bar?: FocusBarBinding;
   /** Absent when the native bridge can't capture; grayscale then falls back to amber. */
   screenCapture?: FocusScreenCaptureBinding;
   /** Owns system grayscale; absent where the native bridge lacks it. */
@@ -129,6 +150,7 @@ export class FocusController extends EventEmitter {
   private machine: FocusMachineState;
   private timer: unknown;
   private lastEmittedView = "";
+  private lastBarSnapshot = "";
   private readonly now: () => number;
   private readonly idleSeconds: () => number;
   private readonly createSessionId: () => string;
@@ -157,6 +179,7 @@ export class FocusController extends EventEmitter {
       Boolean(options.systemFilter?.available)
     );
     options.overlay?.setActionHandler((line) => this.handleOverlayAction(line));
+    options.bar?.setActionHandler((line) => this.handleBarAction(line));
   }
 
   view(): FocusViewState {
@@ -177,6 +200,8 @@ export class FocusController extends EventEmitter {
       systemFilter: this.options.systemFilter?.view() ??
         { available: false, phase: "unsupported", failure: null, restorePending: false },
       effect: effectView(this.machine),
+      barPosition: document.barPosition,
+      barAvailable: Boolean(this.options.bar),
       recoveredFromInvalidFile: this.options.store.recoveredFromInvalidFile
     };
   }
@@ -311,6 +336,70 @@ export class FocusController extends EventEmitter {
     return this.publish();
   }
 
+  /** Freezes the countdown and stops reminders until the session is resumed. */
+  pauseSession(): FocusViewState {
+    this.dispatch({ type: "pause_session", now: this.now() });
+    return this.publish();
+  }
+
+  /** Starts the countdown again from where it stopped, keeping the same session. */
+  resumeSession(): FocusViewState {
+    this.dispatch({ type: "resume_session", now: this.now() });
+    return this.publish();
+  }
+
+  /**
+   * Changes the goal, intention or remaining minutes of the running session. The session keeps
+   * its identity, elapsed progress and snooze; the goal itself is only selected, never rewritten.
+   */
+  editSession(value: unknown): FocusViewState {
+    const edit = parseOrThrow(FocusSessionEditSchema, value, "Check the session changes");
+    if (this.machine.session.status !== "active") throw new Error("No focus session is running");
+    let goal: Goal | undefined;
+    if (edit.goalId !== undefined) {
+      goal = this.options.store.goal(edit.goalId);
+      if (!goal) throw new Error("Choose an existing goal");
+      if (this.options.store.load().selectedGoalId !== goal.id) this.options.store.selectGoal(goal.id);
+    }
+    this.dispatch({
+      type: "edit_session",
+      now: this.now(),
+      ...(goal ? { goal } : {}),
+      ...(edit.intention !== undefined ? { intention: edit.intention } : {}),
+      ...(edit.remainingMinutes !== undefined ? { remainingMinutes: edit.remainingMinutes } : {})
+    });
+    return this.publish();
+  }
+
+  /** Saves where the session is shown. Switching back to floating keeps the session and position. */
+  setBarPresentation(value: unknown): FocusViewState {
+    const presentation = parseOrThrow(
+      FocusBarPresentationSchema,
+      value,
+      "Choose where to show the running session"
+    );
+    this.options.store.updatePreferences({ barPresentation: presentation });
+    return this.publish();
+  }
+
+  /** Makes the floating bar key so its controls can be used from the keyboard. */
+  focusBar(): FocusViewState {
+    if (!this.options.bar) throw new Error("The floating bar isn't available in this build");
+    if (this.machine.session.status !== "active") throw new Error("No focus session is running");
+    if (this.options.store.load().preferences.barPresentation !== "floating") {
+      this.options.store.updatePreferences({ barPresentation: "floating" });
+    }
+    const view = this.publish();
+    try {
+      this.options.bar.focus();
+    } catch (error) {
+      console.error("Unable to focus the Focus bar", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+    return view;
+  }
+
   snooze(): FocusViewState {
     this.dispatch({ type: "snooze", now: this.now() });
     return this.publish();
@@ -378,6 +467,81 @@ export class FocusController extends EventEmitter {
     this.shutDown = true;
     this.stopTimer();
     this.options.overlay?.setActionHandler(null);
+    this.hideBar();
+    this.options.bar?.setActionHandler(null);
+  }
+
+  private handleBarAction(line: string): void {
+    if (this.shutDown) return;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      return;
+    }
+    const parsed = FocusBarActionSchema.safeParse(value);
+    if (!parsed.success) return;
+    const session = this.machine.session;
+    if (session.status !== "active" || session.id !== parsed.data.sessionId) return;
+    switch (parsed.data.action) {
+      case "pause":
+        if (session.runningSince !== null) this.pauseSession();
+        break;
+      case "resume":
+        if (session.runningSince === null) this.resumeSession();
+        break;
+      case "complete":
+        this.stop();
+        break;
+      case "edit":
+        this.emit("editRequested");
+        break;
+      case "move_to_menu_bar":
+        this.setBarPresentation("menuBar");
+        break;
+      case "moved": {
+        const { x, y } = parsed.data;
+        if (x === undefined || y === undefined) return;
+        const position = FocusBarPositionSchema.safeParse({ x, y });
+        if (!position.success) return;
+        this.options.store.saveBarPosition(position.data);
+        this.publish();
+        break;
+      }
+    }
+  }
+
+  private syncBar(): void {
+    const bar = this.options.bar;
+    if (!bar) return;
+    const session = sessionView(this.machine);
+    const document = this.options.store.load();
+    if (this.shutDown || session.status !== "active" || document.preferences.barPresentation !== "floating") {
+      this.hideBar();
+      return;
+    }
+    const snapshot = focusBarSnapshot(session, this.now(), document.barPosition);
+    const serialized = JSON.stringify(snapshot);
+    if (serialized === this.lastBarSnapshot) return;
+    try {
+      if (bar.update(snapshot) === "shown") this.lastBarSnapshot = serialized;
+    } catch (error) {
+      console.error("Unable to show the Focus bar", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
+  private hideBar(): void {
+    if (!this.options.bar || this.lastBarSnapshot === "") return;
+    this.lastBarSnapshot = "";
+    try {
+      this.options.bar.hide();
+    } catch (error) {
+      console.error("Unable to hide the Focus bar", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
   }
 
   private handleOverlayAction(line: string): void {
@@ -550,6 +714,7 @@ export class FocusController extends EventEmitter {
   }
 
   private publish(): FocusViewState {
+    this.syncBar();
     const view = this.view();
     const serialized = JSON.stringify(view);
     if (serialized !== this.lastEmittedView) {

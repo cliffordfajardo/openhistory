@@ -18,7 +18,14 @@ test("starts empty, creates goals privately and selects the first one", async (c
     version: 1,
     goals: [],
     selectedGoalId: null,
-    preferences: { domains: [], durationMinutes: 25, experience: "amber", amberEdge: true }
+    preferences: {
+      domains: [],
+      durationMinutes: 25,
+      experience: "amber",
+      amberEdge: true,
+      barPresentation: "floating"
+    },
+    barPosition: null
   });
 
   const { goal } = store.saveGoal({ title: "  Ship\tthe   guide ", why: "Readers\r\nare waiting", currentFocus: "Outline" });
@@ -58,13 +65,15 @@ test("persists normalized distracting sites and duration", async (context) => {
     domains: ["video.example", "social.example"],
     durationMinutes: 50,
     experience: "amber",
-    amberEdge: true
+    amberEdge: true,
+    barPresentation: "floating"
   });
   assert.deepEqual(new FocusStore(directory).load().preferences, {
     domains: ["social.example", "video.example"],
     durationMinutes: 50,
     experience: "amber",
-    amberEdge: true
+    amberEdge: true,
+    barPresentation: "floating"
   });
 });
 
@@ -89,7 +98,8 @@ test("files from before the separate amber edge keep their look", async (context
       domains: ["video.example"],
       durationMinutes: 25,
       experience: experience ?? "amber",
-      amberEdge
+      amberEdge,
+      barPresentation: "floating"
     }, String(experience));
     assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   }
@@ -104,8 +114,37 @@ test("persists the amber edge independently of the grayscale choice", async (con
     domains: [],
     durationMinutes: 25,
     experience: "grayscale_screen",
-    amberEdge: false
+    amberEdge: false,
+    barPresentation: "floating"
   });
+});
+
+test("files from before the floating bar get it, and the choice survives a restart", async (context) => {
+  const directory = await testDirectory(context);
+  writeFileSync(resolve(directory, "focus.json"), JSON.stringify({
+    version: 1,
+    goals: [],
+    selectedGoalId: null,
+    preferences: { domains: ["video.example"], durationMinutes: 25, experience: "amber", amberEdge: true }
+  }));
+  const store = new FocusStore(directory);
+  assert.equal(store.recoveredFromInvalidFile, false);
+  assert.equal(store.load().preferences.barPresentation, "floating");
+  assert.equal(store.load().barPosition, null);
+
+  store.updatePreferences({ barPresentation: "menuBar" });
+  assert.equal(new FocusStore(directory).load().preferences.barPresentation, "menuBar");
+});
+
+test("remembers where the floating bar was left and rounds the coordinates", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FocusStore(directory);
+  store.saveBarPosition({ x: 120.4, y: -33.6 });
+  assert.deepEqual(new FocusStore(directory).load().barPosition, { x: 120, y: -34 });
+  store.saveBarPosition(null);
+  assert.equal(new FocusStore(directory).load().barPosition, null);
+  assert.throws(() => store.saveBarPosition({ x: Number.NaN, y: 0 }));
+  assert.throws(() => store.saveBarPosition({ x: 1e9, y: 0 }));
 });
 
 test("reads files saved before reminder styles as amber without losing goals or sites", async (context) => {
@@ -127,8 +166,10 @@ test("reads files saved before reminder styles as amber without losing goals or 
       domains: ["video.example"],
       durationMinutes: 50,
       experience: "amber",
-      amberEdge: true
-    }
+      amberEdge: true,
+      barPresentation: "floating"
+    },
+    barPosition: null
   });
   assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
   assert.deepEqual(readdirSync(directory), ["focus.json"]);
@@ -149,7 +190,7 @@ test("never stores an active session", async (context) => {
   const store = new FocusStore(directory, sequentialIds());
   store.saveGoal({ title: "Goal", why: "", currentFocus: "" });
   const stored = JSON.parse(readFileSync(store.path, "utf8")) as Record<string, unknown>;
-  assert.deepEqual(Object.keys(stored).sort(), ["goals", "preferences", "selectedGoalId", "version"]);
+  assert.deepEqual(Object.keys(stored).sort(), ["barPosition", "goals", "preferences", "selectedGoalId", "version"]);
 });
 
 test("recovers from malformed files by starting fresh and preserving the original", async (context) => {
@@ -185,6 +226,19 @@ test("recovers from malformed files by starting fresh and preserving the origina
       goals: [],
       selectedGoalId: null,
       preferences: { domains: [], durationMinutes: 25, amberEdge: "yes" }
+    }),
+    JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, amberEdge: true, barPresentation: "hud" }
+    }),
+    JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, amberEdge: true },
+      barPosition: { x: "left", y: 0 }
     })
   ]) {
     const directory = await testDirectory(context);

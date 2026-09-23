@@ -1,7 +1,9 @@
 import type {
   ActivityDayView,
+  FocusBarPresentation,
   FocusExperience,
   FocusPreferences,
+  FocusSessionEdit,
   FocusStartRequest,
   FocusViewState,
   GoalDraft
@@ -62,6 +64,12 @@ export const IPC_CHANNELS = {
   stopFocus: "openhistory:focus-stop",
   snoozeFocus: "openhistory:focus-snooze",
   resumeFocus: "openhistory:focus-resume",
+  pauseFocusSession: "openhistory:focus-pause-session",
+  resumeFocusSession: "openhistory:focus-resume-session",
+  editFocusSession: "openhistory:focus-edit-session",
+  setFocusBarPresentation: "openhistory:focus-set-bar-presentation",
+  focusFocusBar: "openhistory:focus-focus-bar",
+  openFocusEditor: "openhistory:focus-open-editor",
   previewFocusReminder: "openhistory:focus-preview-reminder",
   setFocusExperience: "openhistory:focus-set-experience",
   setFocusAmberEdge: "openhistory:focus-set-amber-edge",
@@ -362,6 +370,14 @@ export interface OpenHistoryBridge {
   stopFocus(): Promise<FocusViewState>;
   snoozeFocus(): Promise<FocusViewState>;
   resumeFocus(): Promise<FocusViewState>;
+  /** Freezes the running session: the countdown stops and no reminders appear. */
+  pauseFocusSession(): Promise<FocusViewState>;
+  resumeFocusSession(): Promise<FocusViewState>;
+  editFocusSession(edit: FocusSessionEdit): Promise<FocusViewState>;
+  setFocusBarPresentation(presentation: FocusBarPresentation): Promise<FocusViewState>;
+  /** Shows the floating bar and moves keyboard focus into it. */
+  focusFocusBar(): Promise<FocusViewState>;
+  onOpenFocusEditor(listener: () => void): () => void;
   previewFocusReminder(): Promise<FocusViewState>;
   setFocusExperience(experience: FocusExperience): Promise<FocusViewState>;
   setFocusAmberEdge(amberEdge: boolean): Promise<FocusViewState>;

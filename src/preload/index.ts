@@ -109,6 +109,17 @@ const bridge: OpenHistoryBridge = {
   stopFocus: () => ipcRenderer.invoke(IPC_CHANNELS.stopFocus),
   snoozeFocus: () => ipcRenderer.invoke(IPC_CHANNELS.snoozeFocus),
   resumeFocus: () => ipcRenderer.invoke(IPC_CHANNELS.resumeFocus),
+  pauseFocusSession: () => ipcRenderer.invoke(IPC_CHANNELS.pauseFocusSession),
+  resumeFocusSession: () => ipcRenderer.invoke(IPC_CHANNELS.resumeFocusSession),
+  editFocusSession: (edit) => ipcRenderer.invoke(IPC_CHANNELS.editFocusSession, edit),
+  setFocusBarPresentation: (presentation) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setFocusBarPresentation, presentation),
+  focusFocusBar: () => ipcRenderer.invoke(IPC_CHANNELS.focusFocusBar),
+  onOpenFocusEditor: (listener) => {
+    const handler = (): void => listener();
+    ipcRenderer.on(IPC_CHANNELS.openFocusEditor, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.openFocusEditor, handler);
+  },
   previewFocusReminder: () => ipcRenderer.invoke(IPC_CHANNELS.previewFocusReminder),
   setFocusExperience: (experience) => ipcRenderer.invoke(IPC_CHANNELS.setFocusExperience, experience),
   setFocusAmberEdge: (amberEdge) => ipcRenderer.invoke(IPC_CHANNELS.setFocusAmberEdge, amberEdge),

@@ -4,7 +4,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { loadActivityEvents, parseRawActivityEvent } from "./activity-event-file";
+import type { FocusBarShowResult } from "./focus-bar";
 import type {
+  FocusBarBinding,
   FocusOverlayBinding,
   FocusOverlayShowResult,
   FocusScreenCaptureBinding
@@ -43,6 +45,10 @@ export interface NativeCollectorBinding {
   showFocusOverlay?(requestJSON: string): number;
   hideFocusOverlay?(nudgeId: string, immediate: boolean): void;
   setFocusOverlayActionHandler?(handler: ((line: string) => void) | null): void;
+  updateFocusBar?(snapshotJSON: string): number;
+  hideFocusBar?(): void;
+  focusFocusBar?(): void;
+  setFocusBarActionHandler?(handler: ((line: string) => void) | null): void;
   screenCaptureAccess?(): boolean;
   requestScreenCaptureAccess?(): boolean;
   systemColorFilterRead?(): SystemColorFilterSettings | null;
@@ -59,6 +65,13 @@ const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
   6: "shown_fallback_unavailable",
   7: "shown_fallback_window",
   8: "shown_fallback_window_spans_displays"
+};
+
+const FOCUS_BAR_RESULTS: Record<number, FocusBarShowResult> = {
+  0: "shown",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display"
 };
 
 export class CollectorService extends EventEmitter {
@@ -219,6 +232,28 @@ export class CollectorService extends EventEmitter {
         "invalid_request",
       hide: (nudgeId, immediate) => hideFocusOverlay.call(native, nudgeId, immediate),
       setActionHandler: (handler) => setFocusOverlayActionHandler.call(native, handler)
+    };
+  }
+
+  /** The native floating bar, or undefined when the native module predates it. */
+  focusBar(): FocusBarBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { updateFocusBar, hideFocusBar, focusFocusBar, setFocusBarActionHandler } = native;
+    if (typeof updateFocusBar !== "function" || typeof hideFocusBar !== "function" ||
+        typeof focusFocusBar !== "function" || typeof setFocusBarActionHandler !== "function") {
+      return undefined;
+    }
+    return {
+      update: (snapshot) => FOCUS_BAR_RESULTS[updateFocusBar.call(native, JSON.stringify(snapshot))] ??
+        "invalid_request",
+      hide: () => hideFocusBar.call(native),
+      focus: () => focusFocusBar.call(native),
+      setActionHandler: (handler) => setFocusBarActionHandler.call(native, handler)
     };
   }
 
