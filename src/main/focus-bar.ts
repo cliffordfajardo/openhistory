@@ -31,7 +31,7 @@ export interface FocusBarSnapshot {
   sessionId: string;
   goalTitle: string;
   intention: string;
-  /** Deadline in whole seconds since the epoch, or null while the session is paused. */
+  /** Deadline in seconds since the epoch, or null while the session is paused. */
   endsAtEpochSeconds: number | null;
   /** The frozen countdown while paused; null while running, when the deadline decides. */
   pausedRemainingSeconds: number | null;
@@ -53,11 +53,11 @@ export function focusBarSnapshot(
     sessionId: session.id,
     goalTitle: session.goal.title,
     intention: session.intention,
-    endsAtEpochSeconds: session.endsAt === null ? null : Math.round(Date.parse(session.endsAt) / 1_000),
+    endsAtEpochSeconds: session.endsAt === null ? null : Date.parse(session.endsAt) / 1_000,
     pausedRemainingSeconds: session.endsAt === null
-      ? Math.max(0, Math.round(focusSessionRemainingMs(session, now) / 1_000))
+      ? focusSessionRemainingMs(session, now) / 1_000
       : null,
-    totalSeconds: Math.max(1, Math.round(session.totalMs / 1_000)),
+    totalSeconds: Math.max(1, session.totalMs / 1_000),
     snoozed: snoozedUntil > now,
     position
   };

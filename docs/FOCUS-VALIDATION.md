@@ -115,7 +115,7 @@ reminder state machine, not the full browser Accessibility pipeline.
 ## Floating Focus bar, pause and the session menu bar
 
 Validated on 23 September 2026 on macOS 26.6.2, Apple Silicon. Typechecking,
-356 TypeScript tests, 42 Swift tests, native bridge smoke, distribution and inference-preservation
+357 TypeScript tests, 42 Swift tests, native bridge smoke, distribution and inference-preservation
 checks pass. Synthetic GPU checks still pass for grayscale orientation and scaling.
 The signed app builds and launches with the existing permissions and saved preferences.
 
@@ -125,7 +125,7 @@ failures, snapshot deduplication, preference migration, tray ownership and displ
 
 Live checks confirmed the native capsule and running countdown, keyboard entry, Tab navigation,
 pause through Space, overflow through Return, moving to menu-bar-only mode, restoring the floating
-bar and editing remaining time without restarting the session. The bar has a full-height translucent
+bar and editing remaining time without restarting the session. Green progress fill was checked at a visible fraction, and its paused variant was checked on screen. A resume rounding error was reproduced in a test and fixed by preserving milliseconds in native snapshots. The bar has a full-height translucent
 progress fill behind its labels and controls. Progress is derived from the same elapsed-session model
 and freezes while paused. A dark-mode contrast issue in the session editor was corrected after visual
 inspection.

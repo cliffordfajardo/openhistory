@@ -53,7 +53,7 @@ test("a paused session sends its frozen countdown instead of a deadline", () => 
     { x: 12, y: 30 }
   );
   assert.equal(snapshot.endsAtEpochSeconds, null);
-  assert.equal(snapshot.pausedRemainingSeconds, 480);
+  assert.equal(snapshot.pausedRemainingSeconds, 480.4);
   assert.deepEqual(snapshot.position, { x: 12, y: 30 });
 });
 
@@ -108,4 +108,12 @@ test("bar actions are accepted only in their exact shape", () => {
   ]) {
     assert.equal(FocusBarActionSchema.safeParse(value).success, false, JSON.stringify(value) ?? "undefined");
   }
+});
+
+
+test("the native deadline preserves milliseconds across resume", () => {
+  const deadline = T0 + 60_750;
+  const snapshot = focusBarSnapshot(session({ endsAt: new Date(deadline).toISOString() }), T0 + 750, null);
+  assert.equal(snapshot.endsAtEpochSeconds, deadline / 1_000);
+  assert.equal(Math.ceil(snapshot.endsAtEpochSeconds! - (T0 + 750) / 1_000), 60);
 });
