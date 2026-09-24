@@ -1,13 +1,17 @@
 import type { BootstrapState, CollectionSettings } from "@shared/contracts";
 import {
   FOCUS_DURATION_PRESETS,
+  FOCUS_EDGE_MODES,
   FOCUS_LIMITS,
   FOCUS_PROGRESS_COLOR_PRESETS,
   FOCUS_TIMING,
+  effectiveFocusEdgeColor,
   focusSessionProgress,
   focusSessionRemainingMs,
   parseFocusDomain,
   type FocusDetectionState,
+  type FocusEdgeMode,
+  type FocusEdgePatch,
   type FocusEffectFallbackReason,
   type FocusEffectState,
   type FocusExperience,
@@ -88,7 +92,7 @@ const EXPERIENCE_COPY: Record<FocusExperience, { label: string; detail: string }
   },
   grayscale_system: {
     label: "System",
-    detail: "Experimental. Turns on macOS Color Filters through a private setting: every display turns gray, including the card and amber edge. No Screen Recording."
+    detail: "Experimental. Turns on macOS Color Filters through a private setting: every display turns gray, including the card and screen edge. No Screen Recording."
   }
 };
 
@@ -105,11 +109,11 @@ const FALLBACK_COPY: Record<FocusEffectFallbackReason, string> = {
   system_filter_restored: "you restored colors"
 };
 
-function effectStatusCopy(effect: FocusEffectState, amberEdge: boolean): string | undefined {
+function effectStatusCopy(effect: FocusEffectState, reminderEdge: boolean): string | undefined {
   const subject = effect.preview ? "preview" : "reminder";
   if (effect.status === "fallback") {
     const reason = FALLBACK_COPY[effect.fallbackReason ?? "capture_failed"];
-    const shown = amberEdge ? "the card and amber edge" : "only the card";
+    const shown = reminderEdge ? "the card and screen edge" : "only the card";
     return effect.visible
       ? `Grayscale isn’t on (${reason}), so this ${subject} shows ${shown}.`
       : `The last ${subject} showed without grayscale: ${reason}.`;
@@ -542,7 +546,6 @@ function ProgressColorRow({
   const [pending, setPending] = useState<string>();
   const queued = useRef<string | undefined>(undefined);
   const saving = useRef(false);
-  const color = pending ?? focus.preferences.progressColor;
 
   async function choose(value: string): Promise<void> {
     queued.current = value;
@@ -573,16 +576,46 @@ function ProgressColorRow({
   }
 
   return (
+    <FocusColorRow
+      caption="Applies immediately to both progress bars."
+      customLabel="Custom progress color"
+      id="focus-progress-color-label"
+      onChoose={(value) => void choose(value)}
+      title="Color"
+      value={pending ?? focus.preferences.progressColor}
+    />
+  );
+}
+
+function FocusColorRow({
+  caption,
+  customLabel,
+  disabled = false,
+  id,
+  onChoose,
+  title,
+  value
+}: {
+  caption: string;
+  customLabel: string;
+  disabled?: boolean;
+  id: string;
+  onChoose: (value: string) => void;
+  title: string;
+  value: string;
+}): React.JSX.Element {
+  return (
     <div className="focus-color">
-      <span className="focus-color-title" id="focus-color-label">Color</span>
-      <div aria-labelledby="focus-color-label" className="focus-color-choices" role="group">
+      <span className="focus-color-title" id={id}>{title}</span>
+      <div aria-labelledby={id} className="focus-color-choices" role="group">
         {FOCUS_PROGRESS_COLOR_PRESETS.map((preset) => (
           <button
             aria-label={preset.name}
-            aria-pressed={color === preset.value}
-            className={color === preset.value ? "focus-color-swatch is-chosen" : "focus-color-swatch"}
+            aria-pressed={value === preset.value}
+            className={value === preset.value ? "focus-color-swatch is-chosen" : "focus-color-swatch"}
+            disabled={disabled}
             key={preset.value}
-            onClick={() => void choose(preset.value)}
+            onClick={() => onChoose(preset.value)}
             style={{ "--swatch": preset.value } as React.CSSProperties}
             title={preset.name}
             type="button"
@@ -591,19 +624,126 @@ function ProgressColorRow({
           </button>
         ))}
         <label className="focus-color-custom" title="Custom color">
-          <span className="focus-color-well" style={{ "--swatch": color } as React.CSSProperties} />
+          <span className="focus-color-well" style={{ "--swatch": value } as React.CSSProperties} />
           <span>Custom</span>
           <input
-            aria-label="Custom progress color"
-            onChange={(event) => void choose(event.target.value)}
+            aria-label={customLabel}
+            disabled={disabled}
+            onChange={(event) => onChoose(event.target.value)}
             type="color"
-            value={color}
+            value={value}
           />
         </label>
       </div>
-      <small className="focus-quiet">
-        Applies immediately to both progress bars.
-      </small>
+      <small className="focus-quiet">{caption}</small>
+    </div>
+  );
+}
+
+const EDGE_MODE_COPY: Record<FocusEdgeMode, { label: string; detail: string }> = {
+  off: {
+    label: "Off",
+    detail: "No edge. Reminders still show their card and any grayscale."
+  },
+  distraction: {
+    label: "On distraction",
+    detail: "A soft glow around the display with the listed site while a reminder shows."
+  },
+  focus_halo: {
+    label: "Focus halo",
+    detail: "Shows a glow on every display while you focus. Hides on listed sites, pause, or uncertain detection. Grayscale is chosen separately."
+  }
+};
+
+function ScreenEdgeGroup({
+  focus,
+  setError,
+  setState
+}: {
+  focus: FocusViewState;
+  setError: (message: string | undefined) => void;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const [pending, setPending] = useState<FocusEdgePatch>();
+  const queued = useRef<FocusEdgePatch | undefined>(undefined);
+  const saving = useRef(false);
+  const edge = { ...focus.preferences.edge, ...pending };
+  const available = focus.edgeAvailable;
+
+  async function change(patch: FocusEdgePatch): Promise<void> {
+    queued.current = { ...queued.current, ...patch };
+    setPending((current) => ({ ...current, ...patch }));
+    if (saving.current) return;
+    saving.current = true;
+    try {
+      while (queued.current !== undefined) {
+        const next = queued.current;
+        queued.current = undefined;
+        try {
+          const view = await window.openHistory.setFocusEdge(next);
+          withFocus(setState, view);
+          if (queued.current === undefined) {
+            setPending(undefined);
+            setError(undefined);
+          }
+        } catch (caught) {
+          queued.current = undefined;
+          setPending(undefined);
+          setError(readableError(caught));
+        }
+      }
+    } finally {
+      saving.current = false;
+    }
+  }
+
+  return (
+    <div className="focus-edge">
+      <p className="focus-quiet" id="focus-edge-mode-label">Screen edge</p>
+      <div className="focus-style-options" role="radiogroup" aria-labelledby="focus-edge-mode-label">
+        {FOCUS_EDGE_MODES.map((option) => (
+          <button
+            aria-checked={edge.mode === option}
+            className={edge.mode === option ? "focus-style-option active" : "focus-style-option"}
+            disabled={option === "focus_halo" && edge.mode !== option && !available}
+            key={option}
+            onClick={() => void change({ mode: option })}
+            role="radio"
+            type="button"
+          >
+            <strong>{EDGE_MODE_COPY[option].label}</strong>
+            <span>{EDGE_MODE_COPY[option].detail}</span>
+          </button>
+        ))}
+      </div>
+      <FocusColorRow
+        caption={edge.syncWithProgress
+          ? "Follows the progress color. Your saved edge color returns when sync is off."
+          : "Used by both edge modes. Applies immediately."}
+        customLabel="Custom edge color"
+        disabled={!available || edge.syncWithProgress}
+        id="focus-edge-color-label"
+        onChoose={(value) => void change({ color: value })}
+        title="Edge color"
+        value={effectiveFocusEdgeColor({ edge, progressColor: focus.preferences.progressColor })}
+      />
+      <label className="focus-edge-toggle">
+        <input
+          checked={edge.syncWithProgress}
+          disabled={!available}
+          onChange={(event) => void change({ syncWithProgress: event.target.checked })}
+          type="checkbox"
+        />
+        <span>
+          <strong>Sync with progress color</strong>
+          <small>The edge follows the progress bars’ color, including later changes.</small>
+        </span>
+      </label>
+      {!available ? (
+        <p className="focus-quiet">
+          Update the app to use focus halo and edge colors. Amber reminders are still available in this version.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -690,19 +830,22 @@ function SessionDisplayCard({
 
 async function previewReminder(setState: SetAppState): Promise<string> {
   let requested: FocusExperience = "amber";
+  let halo = false;
   const failure = await focusAction(setState, async () => {
     const next = await window.openHistory.previewFocusReminder();
     requested = next.effect?.requested ?? "amber";
+    halo = next.preferences.edge.mode === "focus_halo";
     return next;
   });
   if (failure) return failure;
-  if (requested === "amber") return "Preview shown on this display for about 8 seconds.";
+  const haloNote = halo ? " Focus halo steps aside during the preview and returns afterward while you’re on task." : "";
+  if (requested === "amber") return `Preview shown on this display for about 8 seconds.${haloNote}`;
   if (requested === "grayscale_system") {
-    return "Preview shown for about 8 seconds; your earlier colors return afterward. Status is under Reminder style.";
+    return `Preview shown for about 8 seconds; your earlier colors return afterward. Status is under Reminder style.${haloNote}`;
   }
   return requested === "grayscale_window"
-    ? "Preview shown for about 8 seconds. This window stands in for the distracting one. Grayscale status is under Reminder style."
-    : "Preview card shown on this display for about 8 seconds. Grayscale status is under Reminder style.";
+    ? `Preview shown for about 8 seconds. This window stands in for the distracting one. Grayscale status is under Reminder style.${haloNote}`
+    : `Preview card shown on this display for about 8 seconds. Grayscale status is under Reminder style.${haloNote}`;
 }
 
 function ReminderStyleCard({
@@ -714,9 +857,9 @@ function ReminderStyleCard({
 }): React.JSX.Element {
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
-  const { experience, amberEdge } = focus.preferences;
+  const { experience, edge } = focus.preferences;
   const access = focus.screenCapture.access;
-  const effectCopy = focus.effect ? effectStatusCopy(focus.effect, amberEdge) : undefined;
+  const effectCopy = focus.effect ? effectStatusCopy(focus.effect, edge.mode === "distraction") : undefined;
   const capture = experience === "grayscale_window" || experience === "grayscale_screen";
   const systemFilter = focus.systemFilter;
   const showSystemStatus = experience === "grayscale_system" || systemFilter.restorePending ||
@@ -726,13 +869,6 @@ function ReminderStyleCard({
     if (next === experience || saving) return;
     setSaving(true);
     setError(await focusAction(setState, () => window.openHistory.setFocusExperience(next)));
-    setSaving(false);
-  }
-
-  async function setEdge(next: boolean): Promise<void> {
-    if (saving) return;
-    setSaving(true);
-    setError(await focusAction(setState, () => window.openHistory.setFocusAmberEdge(next)));
     setSaving(false);
   }
 
@@ -757,18 +893,7 @@ function ReminderStyleCard({
           <span>Every reminder shows the same card with Snooze and Dismiss. Changes apply right away, even during a session.</span>
         </div>
       </div>
-      <label className="focus-edge-toggle">
-        <input
-          checked={amberEdge}
-          disabled={saving}
-          onChange={(event) => void setEdge(event.target.checked)}
-          type="checkbox"
-        />
-        <span>
-          <strong>Amber edge</strong>
-          <small>A soft amber glow around the display with the distracting window. Works with any grayscale choice.</small>
-        </span>
-      </label>
+      <ScreenEdgeGroup focus={focus} setError={setError} setState={setState} />
       <p className="focus-quiet" id="focus-grayscale-label">Grayscale while a reminder shows</p>
       <div className="focus-style-options" role="radiogroup" aria-labelledby="focus-grayscale-label">
         {(Object.keys(EXPERIENCE_COPY) as FocusExperience[]).map((option) => (

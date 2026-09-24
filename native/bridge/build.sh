@@ -104,6 +104,7 @@ build_architecture() {
     native/collector/Sources/ActivityCollector/CollectorRuntime.swift \
     native/bridge/EmbeddedCollectorBridge.swift \
     native/bridge/FocusOverlay.swift \
+    native/bridge/FocusEdge.swift \
     native/bridge/FocusBar.swift \
     native/bridge/TimerBar.swift \
     native/bridge/FocusGrayscale.swift \

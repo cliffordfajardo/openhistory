@@ -12,9 +12,12 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { FocusBarShowResult, FocusBarSnapshot } from "./focus-bar";
+import type { FocusEdgeSnapshot } from "./focus-edge";
 import {
   FocusController,
   type FocusBarBinding,
+  type FocusEdgeBinding,
+  type FocusEdgeUpdateResult,
   type FocusOverlayBinding,
   type FocusOverlayRequest,
   type FocusOverlayShowResult,
@@ -36,15 +39,18 @@ class FakeOverlay implements FocusOverlayBinding {
   handler: ((line: string) => void) | null = null;
   result: FocusOverlayShowResult = "shown";
   onShow?: () => void;
+  log: string[] = [];
 
   show(request: FocusOverlayRequest): FocusOverlayShowResult {
     this.shown.push(request);
+    this.log.push(`overlay:show:${request.nudgeId}`);
     this.onShow?.();
     return this.result;
   }
 
   hide(nudgeId: string, immediate: boolean): void {
     this.hidden.push({ nudgeId, immediate });
+    this.log.push(`overlay:hide:${nudgeId}`);
   }
 
   setActionHandler(handler: ((line: string) => void) | null): void {
@@ -89,6 +95,28 @@ class FakeTimerBar implements TimerBarBinding {
 
   shutdown(): void {
     this.shutdowns += 1;
+  }
+}
+
+class FakeEdge implements FocusEdgeBinding {
+  snapshots: FocusEdgeSnapshot[] = [];
+  shutdowns = 0;
+  result: FocusEdgeUpdateResult = "applied";
+  log: string[] = [];
+
+  update(snapshot: FocusEdgeSnapshot): FocusEdgeUpdateResult {
+    this.snapshots.push(snapshot);
+    this.log.push(`edge:${snapshot.halo.kind}`);
+    return this.result;
+  }
+
+  shutdown(): void {
+    this.shutdowns += 1;
+    this.log.push("edge:shutdown");
+  }
+
+  get last(): FocusEdgeSnapshot | undefined {
+    return this.snapshots.at(-1);
   }
 }
 
@@ -143,6 +171,9 @@ class FailingSessionStore extends FocusStore {
 interface Fixture {
   controller: FocusController;
   overlay: FakeOverlay;
+  edge: FakeEdge;
+  /** Overlay and edge calls in the order they happened. */
+  log: string[];
   bar: FakeBar;
   timerBar: FakeTimerBar;
   timers: ManualTimers;
@@ -167,7 +198,11 @@ async function fixture(
   suppliedStore?: FocusStore
 ): Promise<Fixture> {
   const dataDirectory = directory ?? await testDirectory(context);
+  const log: string[] = [];
   const overlay = new FakeOverlay();
+  const edge = new FakeEdge();
+  overlay.log = log;
+  edge.log = log;
   const bar = new FakeBar();
   const timerBar = new FakeTimerBar();
   const timers = new ManualTimers();
@@ -188,6 +223,7 @@ async function fixture(
   const controller = new FocusController({
     store,
     overlay,
+    edge,
     bar,
     timerBar,
     screenCapture,
@@ -204,7 +240,7 @@ async function fixture(
   controller.on("state", (state: FocusViewState) => states.push(state));
   context.after(() => controller.shutdown());
   return {
-    controller, overlay, bar, timerBar, timers, observations, clock, capability, states, store,
+    controller, overlay, edge, log, bar, timerBar, timers, observations, clock, capability, states, store,
     directory: dataDirectory, screenCapture
   };
 }
@@ -737,6 +773,7 @@ const GRAY = { enabled: true, type: 1 };
 class FakeColorFilters implements SystemColorFilterBinding {
   writes: SystemColorFilterSettings[] = [];
   writable = true;
+  log: string[] = [];
 
   constructor(public settings: SystemColorFilterSettings = { enabled: false, type: 2 }) {}
 
@@ -746,6 +783,7 @@ class FakeColorFilters implements SystemColorFilterBinding {
 
   write(settings: SystemColorFilterSettings): boolean {
     this.writes.push({ ...settings });
+    this.log.push("filter:write");
     if (this.writable) this.settings = { ...settings };
     return this.writable;
   }
@@ -761,6 +799,7 @@ async function systemFixture(
     journalPath: resolve(directory, "color-filter-restore.json")
   });
   const f = await fixture(context, directory, new FakeScreenCapture(), filter);
+  filters.log = f.log;
   return { ...f, filters };
 }
 
@@ -850,18 +889,24 @@ test("system grayscale can't be chosen without the native setting, and a saved c
   );
 });
 
-test("style and amber edge changes during a system grayscale reminder keep the session", async (context) => {
+test("style and edge changes during a system grayscale reminder keep the session", async (context) => {
   const f = await systemSession(context);
   evidence(f);
   const session = f.controller.view().session;
+  const shows = f.overlay.shown.length;
+  const hides = f.overlay.hidden.length;
 
-  f.controller.setAmberEdge(false);
-  const edgeless = f.overlay.shown.at(-1)!;
-  assert.deepEqual([edgeless.experience, edgeless.amberEdge], ["grayscale_system", false]);
+  f.controller.setEdge({ mode: "off" });
+  assert.equal(f.edge.last?.mode, "off", "only the edge owner hears about the edge");
+  assert.deepEqual([f.overlay.shown.length, f.overlay.hidden.length], [shows, hides],
+    "the reminder and its card are left exactly as they are");
   assert.equal(f.filters.writes.length, 1, "the edge toggle doesn't cycle Color Filters");
   assert.equal(f.controller.view().effect?.status, "showing");
-  assert.throws(() => f.controller.setAmberEdge("no"));
-  assert.equal(new FocusStore(f.directory).load().preferences.amberEdge, false);
+  assert.throws(() => f.controller.setEdge("no"));
+  assert.equal(new FocusStore(f.directory).load().preferences.edge.mode, "off");
+  f.controller.setEdge({ mode: "distraction" });
+  assert.equal(f.edge.last?.mode, "distraction", "switching back reaches the reminder still showing");
+  assert.deepEqual([f.overlay.shown.length, f.overlay.hidden.length], [shows, hides]);
 
   f.screenCapture.granted = true;
   f.controller.setExperience("grayscale_screen");
@@ -1649,4 +1694,354 @@ test("repeated legal edits can persist a session whose total exceeds one day", a
   assert.equal(session.status, "active");
   assert.equal(session.status === "active" && session.totalMs > 24 * 60 * 60_000, true);
   assert.equal(f.store.load().session?.totalMs, session.status === "active" ? session.totalMs : 0);
+});
+
+async function haloSession(
+  context: TestContext,
+  systemGrayscale = false
+): Promise<Fixture & { filters?: FakeColorFilters }> {
+  const f = systemGrayscale ? await systemFixture(context) : await fixture(context);
+  if (systemGrayscale) f.controller.setExperience("grayscale_system");
+  const goalId = readyToStart(f);
+  f.controller.setEdge({ mode: "focus_halo" });
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  return f;
+}
+
+test("the edge owner is told the saved edge before anything can show", async (context) => {
+  const f = await fixture(context);
+  assert.equal(f.controller.view().edgeAvailable, true);
+  assert.deepEqual(f.edge.snapshots, [{ mode: "distraction", color: "#ffad33", halo: { kind: "hidden" } }]);
+});
+
+test("a listed site hides the halo before a reminder shows, and the halo returns only after it hides", async (context) => {
+  const f = await haloSession(context);
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "a new session waits for evidence");
+  evidence(f, "docs.example", 1);
+  assert.deepEqual(f.edge.last, {
+    mode: "focus_halo",
+    color: "#ffad33",
+    halo: { kind: "visible", generation: 1, sequence: 1 }
+  });
+  assert.equal(f.overlay.shown.length, 0, "the halo is never a reminder");
+
+  f.log.length = 0;
+  f.clock.now += 500;
+  evidence(f, "video.example", 2);
+  const reminder = f.overlay.shown.at(-1);
+  assert(reminder);
+  assert.deepEqual(f.log, ["edge:hidden", `overlay:show:${reminder.nudgeId}`]);
+  assert.equal(reminder.amberEdge, false, "a bridge without the edge owner draws no edge in halo mode");
+
+  f.log.length = 0;
+  f.clock.now += 500;
+  evidence(f, "docs.example", 3);
+  assert.deepEqual(f.log, [`overlay:hide:${reminder.nudgeId}`, "edge:visible"]);
+});
+
+test("a listed site hides the halo while snoozed, dismissed or cooling down, with no reminder", async (context) => {
+  const f = await haloSession(context);
+  let sequence = 0;
+  const observe = (domain: string): void => {
+    f.clock.now += 100;
+    sequence += 1;
+    evidence(f, domain, sequence);
+  };
+
+  f.controller.snooze();
+  observe("docs.example");
+  assert.equal(String(f.edge.last?.halo.kind), "visible", "a snooze doesn't hide the halo on task");
+  observe("video.example");
+  assert.equal(String(f.edge.last?.halo.kind), "hidden");
+  assert.equal(f.overlay.shown.length, 0, "snoozed");
+
+  f.controller.resume();
+  observe("docs.example");
+  observe("video.example");
+  const dismissed = f.overlay.shown.at(-1);
+  assert(dismissed);
+  f.overlay.handler?.(JSON.stringify({
+    action: "dismiss",
+    nudgeId: dismissed.nudgeId,
+    sessionId: "session-fixed",
+    preview: false
+  }));
+  observe("docs.example");
+  assert.equal(String(f.edge.last?.halo.kind), "visible");
+  observe("video.example");
+  assert.equal(String(f.edge.last?.halo.kind), "hidden");
+  assert.equal(f.overlay.shown.length, 1, "dismissed");
+
+  f.controller.resume();
+  observe("docs.example");
+  observe("video.example");
+  assert.equal(String(f.edge.last?.halo.kind), "hidden");
+  assert.equal(f.overlay.shown.length, 1, "still inside the global cooldown");
+  assert.deepEqual(f.observations, [1], "none of this restarts observation");
+});
+
+test("a test reminder sets the halo aside first and gives it back only after the preview hides", async (context) => {
+  const f = await haloSession(context);
+  evidence(f, "docs.example", 1);
+  f.log.length = 0;
+  f.controller.preview();
+  assert.deepEqual(f.log, ["edge:hidden", "overlay:show:preview-fixed"]);
+  assert.equal(f.overlay.shown.at(-1)?.amberEdge, false, "the preview card shows without an edge");
+
+  f.log.length = 0;
+  for (let sequence = 2; sequence <= 9; sequence += 1) {
+    f.clock.now += 1_000;
+    evidence(f, "docs.example", sequence);
+  }
+  assert.deepEqual(f.log, ["overlay:hide:preview-fixed", "edge:visible"]);
+});
+
+test("the halo returns only after system grayscale has been put back", async (context) => {
+  const f = await haloSession(context, true);
+  evidence(f, "video.example", 1);
+  assert.equal(f.controller.view().systemFilter.phase, "applied");
+  const nudgeId = f.overlay.shown.at(-1)?.nudgeId;
+  f.log.length = 0;
+  f.clock.now += 500;
+  evidence(f, "docs.example", 2);
+  assert.deepEqual(f.log, [`overlay:hide:${nudgeId}`, "filter:write", "edge:visible"]);
+});
+
+test("failed system grayscale restoration keeps the halo hidden until a retry succeeds", async (context) => {
+  const f = await haloSession(context, true);
+  assert(f.filters);
+  evidence(f, "video.example", 1);
+  f.filters.writable = false;
+  f.clock.now += 500;
+  evidence(f, "docs.example", 2);
+  assert.equal(f.controller.view().systemFilter.restorePending, true);
+  assert.equal(String(f.edge.last?.halo.kind), "hidden");
+  f.controller.setEdge({ color: "#8a75b8" });
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "preference edits cannot bypass restoration");
+  f.timers.tick();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden");
+  f.filters.writable = true;
+  f.log.length = 0;
+  f.timers.tick();
+  assert.deepEqual(f.log, ["filter:write", "edge:visible"]);
+  assert.equal(f.controller.view().systemFilter.restorePending, false);
+});
+
+test("pause, stop, completion, staleness and a restart hide the halo until fresh evidence", async (context) => {
+  const f = await haloSession(context);
+  evidence(f, "docs.example", 1);
+  f.controller.pauseSession();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "paused");
+  f.controller.resumeSession();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "resuming waits for new evidence");
+  f.timers.tick();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden");
+  evidence(f, "docs.example", 1);
+  assert.deepEqual(f.edge.last?.halo, { kind: "visible", generation: 2, sequence: 1 });
+
+  f.clock.now += FOCUS_TIMING.evidenceFreshnessMs + 1;
+  f.timers.tick();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "evidence that went stale hides the halo on the next heartbeat");
+  evidence(f, "docs.example", 2);
+  assert.equal(String(f.edge.last?.halo.kind), "visible");
+
+  f.controller.resetEvidence();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "a collector restart forgets the evidence the halo stood on");
+  evidence(f, "docs.example", 1);
+
+  f.capability.accessibilityTrusted = false;
+  f.controller.refreshCapability();
+  assert.equal(String(f.edge.last?.halo.kind), "hidden", "losing capability hides the halo");
+  f.capability.accessibilityTrusted = true;
+  f.controller.refreshCapability();
+  evidence(f, "docs.example", 2);
+  assert.equal(String(f.edge.last?.halo.kind), "visible");
+
+  f.controller.shutdown({ retainSession: true });
+  assert.equal(f.edge.shutdowns, 1, "quitting removes every edge panel");
+  const updates = f.edge.snapshots.length;
+  evidence(f, "docs.example", 3);
+  assert.equal(f.edge.snapshots.length, updates, "nothing is drawn after shutdown");
+
+  const restarted = await fixture(context, f.directory, undefined, undefined, f.clock.now + 1_000);
+  assert.deepEqual(restarted.edge.snapshots, [{ mode: "focus_halo", color: "#ffad33", halo: { kind: "hidden" } }],
+    "a restored session starts hidden");
+  evidence(restarted, "docs.example", 1);
+  assert.equal(restarted.edge.last?.halo.kind, "visible");
+  restarted.controller.stop();
+  assert.equal(restarted.edge.last?.halo.kind, "hidden", "completing the session hides the halo");
+
+  const finishing = await haloSession(context);
+  evidence(finishing, "docs.example", 1);
+  finishing.clock.now += 25 * 60_000;
+  finishing.timers.tick();
+  assert.equal(finishing.controller.view().session.status, "idle");
+  assert.equal(finishing.edge.last?.halo.kind, "hidden", "running out hides the halo");
+});
+
+test("a changed site list applies to the halo and to reminders at once", async (context) => {
+  const f = await haloSession(context);
+  evidence(f, "docs.example", 1);
+  f.log.length = 0;
+  f.controller.savePreferences({ domains: ["docs.example", "video.example"], durationMinutes: 25 });
+  const reminder = f.overlay.shown.at(-1);
+  assert(reminder);
+  assert.deepEqual(f.log, ["edge:hidden", `overlay:show:${reminder.nudgeId}`]);
+  f.controller.savePreferences({ domains: ["video.example"], durationMinutes: 25 });
+  assert.equal(String(f.edge.last?.halo.kind), "visible");
+});
+
+test("edge mode, color and sync changes redraw only the edge", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.setShowTimerBar(true);
+  f.controller.start({ goalId, intention: "", durationMinutes: 25 });
+  f.clock.now += 1_000;
+  evidence(f);
+  const shows = f.overlay.shown.length;
+  const hides = f.overlay.hidden.length;
+  const session = f.store.load().session;
+  const clock = f.timerBar.requests.at(-1)?.session;
+  assert.equal(shows, 1);
+
+  f.controller.setEdge({ color: "#8A75B8" });
+  assert.equal(f.edge.last?.color, "#8a75b8");
+  f.controller.setEdge({ syncWithProgress: true });
+  assert.equal(f.edge.last?.color, GREEN);
+  f.controller.setEdge({ mode: "focus_halo" });
+  assert.deepEqual([f.edge.last?.mode, f.edge.last?.halo.kind], ["focus_halo", "hidden"],
+    "a listed site keeps the halo away with the reminder up");
+  f.controller.setEdge({ mode: "off" });
+  f.controller.setEdge({ mode: "distraction", syncWithProgress: false });
+  assert.deepEqual(f.edge.last, { mode: "distraction", color: "#8a75b8", halo: { kind: "hidden" } });
+
+  assert.deepEqual([f.overlay.shown.length, f.overlay.hidden.length], [shows, hides],
+    "the card, its grayscale and any capture are never restarted");
+  assert.deepEqual(f.observations, [1]);
+  assert.deepEqual(f.store.load().session, session);
+  assert.deepEqual(f.timerBar.requests.at(-1)?.session, clock);
+  assert.equal(f.controller.view().reminderVisible, true);
+});
+
+test("a synced edge follows the progress color and keeps its own color for later", async (context) => {
+  const f = await fixture(context);
+  f.controller.setEdge({ color: "#8a75b8" });
+  f.controller.setEdge({ syncWithProgress: true });
+  assert.equal(f.edge.last?.color, GREEN);
+  f.controller.setProgressColor("#b86b5c");
+  assert.equal(f.edge.last?.color, "#b86b5c", "a later progress color reaches the edge at once");
+  assert.deepEqual(f.controller.view().preferences.edge,
+    { mode: "distraction", color: "#8a75b8", syncWithProgress: true });
+
+  f.controller.setEdge({ syncWithProgress: false });
+  assert.equal(f.edge.last?.color, "#8a75b8", "unsyncing brings the edge's own color back");
+  const updates = f.edge.snapshots.length;
+  f.controller.setProgressColor("#5c84b8");
+  assert.equal(f.edge.snapshots.length, updates, "an unsynced edge ignores the progress color");
+
+  const restarted = await fixture(context, f.directory);
+  assert.deepEqual(restarted.controller.view().preferences.edge,
+    { mode: "distraction", color: "#8a75b8", syncWithProgress: false });
+});
+
+test("invalid edge changes are refused without touching goals, sites or the session", async (context) => {
+  const f = await fixture(context);
+  const goalId = readyToStart(f);
+  f.controller.start({ goalId, intention: "Keep", durationMinutes: 25 });
+  const before = readFileSync(f.store.path, "utf8");
+  for (const value of [
+    undefined, null, "focus_halo", true, {}, { mode: undefined }, { mode: "always" }, { mode: "amber" },
+    { color: "#fff" }, { color: "orange" }, { color: "#ffad33ff" }, { syncWithProgress: "yes" },
+    { mode: "off", extra: 1 }, { amberEdge: false }
+  ]) {
+    assert.throws(() => f.controller.setEdge(value), Error, JSON.stringify(value) ?? "undefined");
+  }
+  assert.equal(readFileSync(f.store.path, "utf8"), before);
+  assert.equal(f.controller.view().session.status, "active");
+});
+
+test("unchanged edges are sent once, new evidence reaches the owner, and failures are retried", async (context) => {
+  const f = await haloSession(context);
+  evidence(f, "docs.example", 1);
+  let updates = f.edge.snapshots.length;
+  f.timers.tick();
+  f.controller.saveGoal({ title: "Another", why: "", currentFocus: "" });
+  assert.equal(f.edge.snapshots.length, updates, "nothing new, nothing sent");
+  evidence(f, "docs.example", 2);
+  assert.deepEqual(f.edge.last?.halo, { kind: "visible", generation: 1, sequence: 2 },
+    "each accepted observation is passed on so the owner can recover from a context change");
+
+  evidence(f, "video.example", 3);
+  updates = f.edge.snapshots.length;
+  f.clock.now += 100;
+  evidence(f, "video.example", 4);
+  f.timers.tick();
+  assert.equal(f.edge.snapshots.length, updates, "a hidden halo is not sent again");
+
+  f.edge.result = "no_display";
+  f.clock.now += 100;
+  evidence(f, "docs.example", 5);
+  updates = f.edge.snapshots.length;
+  f.timers.tick();
+  assert(f.edge.snapshots.length > updates, "an update that didn't apply is retried");
+  f.edge.result = "applied";
+  f.timers.tick();
+  const applied = f.edge.snapshots.length;
+  f.timers.tick();
+  assert.equal(f.edge.snapshots.length, applied, "and once applied it is not sent again");
+
+  const originalError = console.error;
+  console.error = () => undefined;
+  f.edge.update = () => { throw new Error("bridge gone"); };
+  f.clock.now += 100;
+  evidence(f, "docs.example", 6);
+  console.error = originalError;
+  assert.equal(f.controller.view().session.status, "active", "a failing edge never stops the session");
+});
+
+test("without the native edge owner, focus halo can't be chosen and reminders keep the old edge", async (context) => {
+  const directory = await testDirectory(context);
+  const overlay = new FakeOverlay();
+  const observations: number[] = [];
+  const clock = { now: START_OF_TEST_TIME };
+  const controller = new FocusController({
+    store: new FocusStore(directory, () => "goal-00000001-test"),
+    overlay,
+    setForegroundObservation: (generation) => observations.push(generation),
+    capability: () => ({
+      privacyAccepted: true,
+      captureEnabled: true,
+      collectorAvailable: true,
+      accessibilityTrusted: true,
+      captureBrowserURLs: true
+    }),
+    now: () => clock.now,
+    timers: new ManualTimers()
+  });
+  context.after(() => controller.shutdown());
+  assert.equal(controller.view().edgeAvailable, false);
+  assert.throws(() => controller.setEdge({ mode: "focus_halo" }), /isn’t available/);
+  assert.equal(controller.view().preferences.edge.mode, "distraction");
+
+  const goalId = controller.saveGoal({ title: "Goal", why: "", currentFocus: "" }).goals[0]!.id;
+  controller.savePreferences({ domains: ["video.example"], durationMinutes: 25 });
+  const listed = (sequence: number): void => controller.handleEvidence({
+    kind: "browser",
+    generation: observations.at(-1) ?? 0,
+    sequence,
+    observedAt: clock.now,
+    processIdentifier: 501,
+    bundleIdentifier: "com.apple.Safari",
+    domain: "video.example"
+  });
+  controller.start({ goalId, intention: "", durationMinutes: 25 });
+  listed(1);
+  assert.equal(overlay.shown.at(-1)?.amberEdge, true, "the migrated distraction edge still shows");
+
+  controller.setEdge({ mode: "off" });
+  controller.stop();
+  controller.start({ goalId, intention: "", durationMinutes: 25 });
+  listed(1);
+  assert.equal(overlay.shown.at(-1)?.amberEdge, false, "and off still means no edge");
 });

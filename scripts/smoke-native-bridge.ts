@@ -19,6 +19,8 @@ interface NativeBridge {
   setFocusBarActionHandler(handler: ((line: string) => void) | null): void;
   updateTimerBar(requestJSON: string): number;
   shutdownTimerBar(): void;
+  updateFocusEdge(snapshotJSON: string): number;
+  shutdownFocusEdge(): void;
   screenCaptureAccess(): boolean;
   requestScreenCaptureAccess(): boolean;
   systemColorFilterRead(): { enabled: boolean; type: number } | null;
@@ -37,7 +39,7 @@ try {
     "startCollector", "stopCollector", "setForegroundObservation",
     "showFocusOverlay", "hideFocusOverlay", "setFocusOverlayActionHandler",
     "updateFocusBar", "hideFocusBar", "focusFocusBar", "setFocusBarActionHandler",
-    "updateTimerBar", "shutdownTimerBar",
+    "updateTimerBar", "shutdownTimerBar", "updateFocusEdge", "shutdownFocusEdge",
     "screenCaptureAccess", "requestScreenCaptureAccess", "systemColorFilterRead", "systemColorFilterWrite"
   ] as const) {
     assert.equal(typeof bridge[name], "function", `bridge is missing ${name}`);
@@ -158,6 +160,35 @@ try {
   assert.equal(bridge.updateTimerBar(JSON.stringify({ enabled: false, session: null })), 0,
     "switching the timer bar off must be applied");
   bridge.shutdownTimerBar();
+
+  // Only malformed and hidden edge snapshots are sent: a visible halo would frame every display.
+  const hiddenEdge = { mode: "focus_halo", color: "#8a75b8", halo: { kind: "hidden" } };
+  assert.throws(() => bridge.updateFocusEdge(42 as unknown as string), TypeError);
+  assert.equal(bridge.updateFocusEdge("{not json"), 1, "a malformed edge snapshot must be rejected");
+  assert.equal(bridge.updateFocusEdge("{}"), 1, "an incomplete edge snapshot must be rejected");
+  assert.equal(bridge.updateFocusEdge(JSON.stringify({ ...hiddenEdge, mode: "always" })), 1,
+    "an unknown edge mode must be rejected");
+  for (const color of ["#fff", "#8a75b8ff", "purple", "8a75b8", "#8a75bg"]) {
+    assert.equal(bridge.updateFocusEdge(JSON.stringify({ ...hiddenEdge, color })), 1,
+      `the edge color ${color} must be rejected`);
+  }
+  assert.equal(bridge.updateFocusEdge(JSON.stringify({ ...hiddenEdge, halo: { kind: "visible" } })), 1,
+    "a visible halo without its observation must be rejected");
+  assert.equal(bridge.updateFocusEdge(JSON.stringify({
+    ...hiddenEdge,
+    mode: "distraction",
+    halo: { kind: "visible", generation: 7, sequence: 1 }
+  })), 1, "a visible halo outside focus halo mode must be rejected");
+  assert.equal(bridge.updateFocusEdge(JSON.stringify({
+    ...hiddenEdge,
+    halo: { kind: "hidden", generation: 7, sequence: 1 }
+  })), 1, "a hidden halo carrying an observation must be rejected");
+  assert.equal(bridge.updateFocusEdge(JSON.stringify(hiddenEdge)), 0, "a hidden halo must be applied");
+  assert.equal(bridge.updateFocusEdge(JSON.stringify(hiddenEdge)), 0, "repeating a hidden halo must be applied");
+  assert.equal(bridge.updateFocusEdge(JSON.stringify({ ...hiddenEdge, mode: "off" })), 0,
+    "switching the edge off must be applied");
+  bridge.shutdownFocusEdge();
+  bridge.shutdownFocusEdge();
 
   const started = bridge.startCollector(dataDirectory, JSON.stringify({
     captureWindowTitles: false,

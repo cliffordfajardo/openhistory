@@ -1,4 +1,10 @@
-import { FOCUS_PROGRESS_COLOR_DEFAULT } from "@shared/focus";
+import {
+  FOCUS_EDGE_COLOR_DEFAULT,
+  FOCUS_EDGE_MODES,
+  FOCUS_PROGRESS_COLOR_DEFAULT,
+  type FocusEdgePreferences,
+  type FocusExperience
+} from "@shared/focus";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
@@ -6,6 +12,13 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { FocusStore } from "./focus-store";
+
+const DISTRACTION_EDGE: FocusEdgePreferences = {
+  mode: "distraction",
+  color: FOCUS_EDGE_COLOR_DEFAULT,
+  syncWithProgress: false
+};
+const NO_EDGE: FocusEdgePreferences = { ...DISTRACTION_EDGE, mode: "off" };
 
 function sequentialIds(): () => string {
   let next = 0;
@@ -23,7 +36,7 @@ test("starts empty, creates goals privately and selects the first one", async (c
       domains: [],
       durationMinutes: 25,
       experience: "amber",
-      amberEdge: true,
+      edge: DISTRACTION_EDGE,
       barPresentation: "floating",
       showTimerBar: false,
       progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
@@ -71,7 +84,7 @@ test("persists normalized distracting sites and duration", async (context) => {
     domains: ["video.example", "social.example"],
     durationMinutes: 50,
     experience: "amber",
-    amberEdge: true,
+    edge: DISTRACTION_EDGE,
     barPresentation: "floating",
     showTimerBar: false,
     progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
@@ -80,7 +93,7 @@ test("persists normalized distracting sites and duration", async (context) => {
     domains: ["social.example", "video.example"],
     durationMinutes: 50,
     experience: "amber",
-    amberEdge: true,
+    edge: DISTRACTION_EDGE,
     barPresentation: "floating",
     showTimerBar: false,
     progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
@@ -88,11 +101,11 @@ test("persists normalized distracting sites and duration", async (context) => {
 });
 
 test("files from before the separate amber edge keep their look", async (context) => {
-  for (const [experience, amberEdge] of [
-    [undefined, true],
-    ["amber", true],
-    ["grayscale_window", false],
-    ["grayscale_screen", false]
+  for (const [experience, edge] of [
+    [undefined, DISTRACTION_EDGE],
+    ["amber", DISTRACTION_EDGE],
+    ["grayscale_window", NO_EDGE],
+    ["grayscale_screen", NO_EDGE]
   ] as const) {
     const directory = await testDirectory(context);
     const legacy = JSON.stringify({
@@ -108,7 +121,7 @@ test("files from before the separate amber edge keep their look", async (context
       domains: ["video.example"],
       durationMinutes: 25,
       experience: experience ?? "amber",
-      amberEdge,
+      edge,
       barPresentation: "floating",
       showTimerBar: false,
       progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
@@ -117,20 +130,120 @@ test("files from before the separate amber edge keep their look", async (context
   }
 });
 
-test("persists the amber edge independently of the grayscale choice", async (context) => {
+test("persists the edge independently of the grayscale choice", async (context) => {
   const directory = await testDirectory(context);
   const store = new FocusStore(directory);
-  store.updatePreferences({ experience: "grayscale_system", amberEdge: false });
+  store.updatePreferences({ experience: "grayscale_system", edge: NO_EDGE });
   store.updatePreferences({ experience: "grayscale_screen" });
   assert.deepEqual(new FocusStore(directory).load().preferences, {
     domains: [],
     durationMinutes: 25,
     experience: "grayscale_screen",
-    amberEdge: false,
+    edge: NO_EDGE,
     barPresentation: "floating",
     showTimerBar: false,
     progressColor: FOCUS_PROGRESS_COLOR_DEFAULT
   });
+});
+
+test("an edge setting from before edge modes becomes the matching mode, and the next write drops it", async (context) => {
+  const cases: Array<[boolean, FocusExperience | undefined, FocusEdgePreferences]> = [
+    [true, "grayscale_screen", DISTRACTION_EDGE],
+    [false, "amber", NO_EDGE],
+    [true, undefined, DISTRACTION_EDGE],
+    [false, undefined, NO_EDGE]
+  ];
+  for (const [amberEdge, experience, edge] of cases) {
+    const directory = await testDirectory(context);
+    const legacy = JSON.stringify({
+      version: 1,
+      goals: [{ id: "goal-00000001-test", title: "Kept", why: "", currentFocus: "" }],
+      selectedGoalId: "goal-00000001-test",
+      preferences: {
+        domains: ["video.example"],
+        durationMinutes: 25,
+        ...(experience ? { experience } : {}),
+        amberEdge,
+        showTimerBar: true,
+        progressColor: "#8a75b8"
+      },
+      barPosition: { x: 10, y: 20 },
+      barWidth: 700,
+      barHeight: 80,
+      session: {
+        id: "session-1",
+        goal: { id: "goal-00000001-test", title: "Kept", why: "", currentFocus: "" },
+        intention: "",
+        startedAt: "2026-09-23T10:00:00.000Z",
+        endsAt: null,
+        totalMs: 1_500_000,
+        pausedRemainingMs: 900_000,
+        snoozedUntil: null
+      }
+    });
+    writeFileSync(resolve(directory, "focus.json"), legacy);
+    const store = new FocusStore(directory);
+    assert.equal(store.recoveredFromInvalidFile, false);
+    assert.deepEqual(store.load().preferences.edge, edge, `amberEdge ${amberEdge}, experience ${experience}`);
+    assert.equal(store.load().preferences.experience, experience ?? "amber", "grayscale stays independent");
+    assert.equal(readFileSync(store.path, "utf8"), legacy, "reading never rewrites the file");
+
+    store.updatePreferences({ edge: { ...edge, color: "#5c84b8" } });
+    assert.equal(readFileSync(store.path, "utf8").includes("amberEdge"), false,
+      "the canonical write drops the legacy key");
+    const reloaded = new FocusStore(directory).load();
+    assert.deepEqual(reloaded.preferences.edge, { ...edge, color: "#5c84b8" });
+    assert.equal(reloaded.preferences.progressColor, "#8a75b8");
+    assert.equal(reloaded.preferences.showTimerBar, true);
+    assert.deepEqual(reloaded.preferences.domains, ["video.example"]);
+    assert.equal(reloaded.goals[0]?.title, "Kept");
+    assert.deepEqual([reloaded.barPosition, reloaded.barWidth, reloaded.barHeight], [{ x: 10, y: 20 }, 700, 80]);
+    assert.equal(reloaded.session?.pausedRemainingMs, 900_000, "the saved session survives");
+  }
+});
+
+test("round-trips every edge mode, its own color and sync without touching the progress color", async (context) => {
+  const directory = await testDirectory(context);
+  const store = new FocusStore(directory);
+  store.updatePreferences({ progressColor: "#b86b5c" });
+  for (const mode of FOCUS_EDGE_MODES) {
+    for (const syncWithProgress of [false, true]) {
+      store.updatePreferences({ edge: { mode, color: "#8A75B8", syncWithProgress } });
+      const reloaded = new FocusStore(directory).load().preferences;
+      assert.deepEqual(reloaded.edge, { mode, color: "#8a75b8", syncWithProgress }, "the color is saved lowercase");
+      assert.equal(reloaded.progressColor, "#b86b5c", "syncing never copies one color into the other");
+    }
+  }
+});
+
+test("a malformed edge in the file is refused with the rest of that file", async (context) => {
+  for (const preferences of [
+    { edge: { mode: "always", color: "#ffad33", syncWithProgress: false } },
+    { edge: { mode: "off", color: "#fff", syncWithProgress: false } },
+    { edge: { mode: "off", color: "amber", syncWithProgress: false } },
+    { edge: { mode: "off", color: "#ffad33ff", syncWithProgress: false } },
+    { edge: { mode: "off", color: "#ffad33", syncWithProgress: "yes" } },
+    { edge: { mode: "off", color: "#ffad33" } },
+    { edge: { mode: "off", color: "#ffad33", syncWithProgress: false, glow: 1 } },
+    { edge: "distraction" },
+    { edge: { mode: "off", color: "#ffad33", syncWithProgress: false }, amberEdge: true },
+    { amberEdge: "yes" },
+    { amberEdge: null },
+    { amberEdge: 1 }
+  ]) {
+    const directory = await testDirectory(context);
+    const contents = JSON.stringify({
+      version: 1,
+      goals: [],
+      selectedGoalId: null,
+      preferences: { domains: [], durationMinutes: 25, ...preferences }
+    });
+    writeFileSync(resolve(directory, "focus.json"), contents);
+    const store = new FocusStore(directory, sequentialIds(), () => 5678);
+    assert.equal(store.recoveredFromInvalidFile, true, JSON.stringify(preferences));
+    assert.deepEqual(store.load().preferences.edge, DISTRACTION_EDGE);
+    assert.equal(readFileSync(resolve(directory, "focus.json.invalid-5678"), "utf8"), contents);
+  }
 });
 
 test("a file written before the color could be chosen keeps the green, and a choice survives", async (context) => {
@@ -244,7 +357,7 @@ test("reads files saved before reminder styles as amber without losing goals or 
       domains: ["video.example"],
       durationMinutes: 50,
       experience: "amber",
-      amberEdge: true,
+      edge: { mode: "distraction", color: "#ffad33", syncWithProgress: false },
       barPresentation: "floating",
       showTimerBar: false,
       progressColor: FOCUS_PROGRESS_COLOR_DEFAULT

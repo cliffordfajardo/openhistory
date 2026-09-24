@@ -1,6 +1,7 @@
 import type {
   ActivityDayView,
   FocusBarPresentation,
+  FocusEdgePatch,
   FocusExperience,
   FocusPreferences,
   FocusSessionEdit,
@@ -74,7 +75,7 @@ export const IPC_CHANNELS = {
   openFocusEditor: "openhistory:focus-open-editor",
   previewFocusReminder: "openhistory:focus-preview-reminder",
   setFocusExperience: "openhistory:focus-set-experience",
-  setFocusAmberEdge: "openhistory:focus-set-amber-edge",
+  setFocusEdge: "openhistory:focus-set-edge",
   restoreFocusSystemColors: "openhistory:focus-restore-system-colors",
   requestScreenCapture: "openhistory:focus-request-screen-capture",
   refreshScreenCapture: "openhistory:focus-refresh-screen-capture",
@@ -386,7 +387,8 @@ export interface OpenHistoryBridge {
   onOpenFocusEditor(listener: () => void): () => void;
   previewFocusReminder(): Promise<FocusViewState>;
   setFocusExperience(experience: FocusExperience): Promise<FocusViewState>;
-  setFocusAmberEdge(amberEdge: boolean): Promise<FocusViewState>;
+  /** Changes the screen edge's mode, own color or progress-color sync; omitted fields are kept. */
+  setFocusEdge(patch: FocusEdgePatch): Promise<FocusViewState>;
   /** Puts back the Color Filters settings from before system grayscale. */
   restoreFocusSystemColors(): Promise<FocusViewState>;
   requestScreenCaptureAccess(): Promise<FocusViewState>;

@@ -68,8 +68,6 @@ export interface FocusMachineState {
   session: { status: "idle" } | ActiveSession;
   capability: FocusCapability;
   experience: FocusExperience;
-  /** Warm edge around the display, independent of grayscale. */
-  amberEdge: boolean;
   screenCapture: FocusScreenCaptureAccess;
   /** The private Color Filters setting can be read on this Mac. */
   systemFilterAvailable: boolean;
@@ -144,7 +142,6 @@ export type FocusInput =
   }
   | { type: "overlay_rejected"; now: number; nudgeId: string }
   | { type: "experience_changed"; now: number; experience: FocusExperience }
-  | { type: "amber_edge_changed"; now: number; amberEdge: boolean }
   | { type: "screen_capture"; now: number; access: FocusScreenCaptureAccess }
   | {
     type: "effect_status";
@@ -166,7 +163,6 @@ export type FocusEffect =
       expectedProcessIdentifier: number | null;
       preview: boolean;
       experience: FocusExperience;
-      amberEdge: boolean;
       /** The matched site rule, sent only for a window-only grayscale reminder. */
       domain?: string;
     };
@@ -182,14 +178,12 @@ export function initialFocusState(
   capability: FocusCapability,
   experience: FocusExperience = "amber",
   screenCapture: FocusScreenCaptureAccess = "unsupported",
-  amberEdge = true,
   systemFilterAvailable = false
 ): FocusMachineState {
   return {
     session: { status: "idle" },
     capability,
     experience,
-    amberEdge,
     screenCapture,
     systemFilterAvailable,
     idleSeconds: 0,
@@ -325,8 +319,7 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
           message: input.copy.message,
           expectedProcessIdentifier: null,
           preview: true,
-          experience: beginEffect(state, input.previewId, true, now),
-          amberEdge: state.amberEdge
+          experience: beginEffect(state, input.previewId, true, now)
         }
       });
       break;
@@ -343,11 +336,6 @@ export function reduceFocus(previous: FocusMachineState, input: FocusInput): Foc
     case "experience_changed":
       if (state.experience === input.experience) break;
       state.experience = input.experience;
-      restyle(state, effects);
-      break;
-    case "amber_edge_changed":
-      if (state.amberEdge === input.amberEdge) break;
-      state.amberEdge = input.amberEdge;
       restyle(state, effects);
       break;
     case "screen_capture":
@@ -584,7 +572,6 @@ function evaluate(state: FocusMachineState, now: number, effects: FocusEffect[])
       expectedProcessIdentifier: nudge.processIdentifier,
       preview: false,
       experience,
-      amberEdge: state.amberEdge,
       ...(experience === "grayscale_window" ? { domain: nudge.domain } : {})
     }
   });

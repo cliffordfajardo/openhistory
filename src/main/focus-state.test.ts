@@ -646,37 +646,22 @@ test("window grayscale follows a different listed site without losing the sessio
   assert.equal(hides(harness.browser(T0 + 1_750, "safe.example")).length, 1);
 });
 
-test("every reminder carries the amber edge choice, whatever the grayscale", () => {
+test("reminders leave the edge to the edge owner, whatever the grayscale", () => {
   for (const experience of ["amber", "grayscale_window", "grayscale_screen", "grayscale_system"] as const) {
-    for (const amberEdge of [true, false]) {
-      const harness = new Harness();
-      harness.state = initialFocusState(READY, experience, "granted", amberEdge, true);
-      harness.start();
-      const [show] = shows(harness.browser(T0 + 1_000));
-      assert.deepEqual([show?.request.experience, show?.request.amberEdge], [experience, amberEdge]);
-    }
+    const harness = new Harness();
+    harness.state = initialFocusState(READY, experience, "granted", true);
+    assert.equal("amberEdge" in harness.state, false, "the edge mode is a preference, not reducer state");
+    harness.start();
+    const [show] = shows(harness.browser(T0 + 1_000));
+    assert.equal(show?.request.experience, experience);
+    assert.equal(show && "amberEdge" in show.request, false);
   }
-});
-
-test("toggling the amber edge replaces a visible reminder at once without touching the session", () => {
-  const harness = new Harness();
-  harness.start();
-  const first = shows(harness.browser(T0 + 1_000))[0]!;
-  const session = harness.state.session;
-  const effects = harness.send({ type: "amber_edge_changed", now: T0 + 1_200, amberEdge: false });
-  assert.deepEqual(hides(effects), [{ type: "hide", nudgeId: first.request.nudgeId, immediate: true }]);
-  assert.equal(shows(effects)[0]?.request.amberEdge, false, "the cooldown doesn't delay the change");
-  assert.deepEqual(harness.state.session, session);
-  assert.equal(harness.send({ type: "amber_edge_changed", now: T0 + 1_300, amberEdge: false }).length, 0);
-
-  harness.send({ type: "snooze", now: T0 + 1_400 });
-  assert.equal(shows(harness.send({ type: "amber_edge_changed", now: T0 + 1_500, amberEdge: true })).length, 0);
 });
 
 test("system grayscale reminders never depend on Screen Recording", () => {
   for (const access of ["not_granted", "unsupported"] as const) {
     const harness = new Harness();
-    harness.state = initialFocusState(READY, "grayscale_system", access, false, true);
+    harness.state = initialFocusState(READY, "grayscale_system", access, true);
     harness.start();
     const [show] = shows(harness.browser(T0 + 1_000));
     assert.equal(show?.request.experience, "grayscale_system");
@@ -691,7 +676,7 @@ test("system grayscale reminders never depend on Screen Recording", () => {
 
 test("system grayscale that isn't available, or failed, isn't wanted and says why", () => {
   const harness = new Harness();
-  harness.state = initialFocusState(READY, "grayscale_system", "granted", true, false);
+  harness.state = initialFocusState(READY, "grayscale_system", "granted", false);
   harness.start();
   harness.browser(T0 + 1_000);
   assert.deepEqual(
@@ -701,7 +686,7 @@ test("system grayscale that isn't available, or failed, isn't wanted and says wh
   assert.equal(systemFilterWanted(harness.state), false);
 
   const failed = new Harness();
-  failed.state = initialFocusState(READY, "grayscale_system", "not_granted", true, true);
+  failed.state = initialFocusState(READY, "grayscale_system", "not_granted", true);
   failed.start();
   const nudgeId = shows(failed.browser(T0 + 1_000))[0]!.request.nudgeId;
   failed.send({ type: "effect_status", now: T0 + 1_100, nudgeId, status: "fallback", reason: "system_filter_failed" });
@@ -710,7 +695,7 @@ test("system grayscale that isn't available, or failed, isn't wanted and says wh
 
 test("switching between captured and system grayscale keeps the session and skips the cooldown", () => {
   const harness = new Harness();
-  harness.state = initialFocusState(READY, "grayscale_screen", "granted", true, true);
+  harness.state = initialFocusState(READY, "grayscale_screen", "granted", true);
   harness.start();
   harness.browser(T0 + 1_000);
   const session = harness.state.session;
@@ -753,7 +738,7 @@ test("pausing freezes the countdown past the old deadline, hides the reminder an
 
 test("pausing hides system grayscale, and resuming needs fresh evidence before the next reminder", () => {
   const harness = new Harness();
-  harness.state = initialFocusState(READY, "grayscale_system", "unsupported", true, true);
+  harness.state = initialFocusState(READY, "grayscale_system", "unsupported", true);
   harness.start(T0, "session-a", 25);
   harness.browser(T0 + 1_000);
   assert.equal(systemFilterWanted(harness.state), true);

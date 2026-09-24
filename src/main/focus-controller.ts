@@ -17,11 +17,13 @@ import {
   type FocusBarShowResult,
   type FocusBarSnapshot
 } from "./focus-bar";
+import { focusEdgeSnapshot, type FocusEdgeSnapshot } from "./focus-edge";
 import {
   FocusBarHeightSchema,
   FocusBarPositionSchema,
   FocusBarPresentationSchema,
   FocusBarWidthSchema,
+  FocusEdgePatchSchema,
   FocusExperienceSchema,
   FocusPreferencesInputSchema,
   FocusProgressColorSchema,
@@ -55,7 +57,7 @@ import type { FocusStore } from "./focus-store";
 import type { SystemColorFilterController } from "./system-color-filter";
 
 /**
- * `shown_fallback_*`: the card (and the amber edge, if enabled) is on screen, but captured
+ * `shown_fallback_*`: the card (and the edge, if enabled) is on screen, but captured
  * grayscale was requested and the native side could not start it (no Screen Recording access, no
  * capture/GPU support, or no exactly matched distracting window on a single display).
  */
@@ -79,6 +81,10 @@ export interface FocusOverlayRequest {
   expectedProcessIdentifier: number | null;
   preview: boolean;
   experience: FocusExperience;
+  /**
+   * Read only by a native bridge without the edge owner, which draws its own amber edge. The edge
+   * owner ignores it once it has received an edge update and follows that instead.
+   */
   amberEdge: boolean;
   domain?: string;
 }
@@ -108,6 +114,18 @@ export interface TimerBarBinding {
   shutdown(): void;
 }
 
+export type FocusEdgeUpdateResult = "applied" | "invalid_request" | "not_main_thread" | "no_display";
+
+/**
+ * The native edge owner: the one place that draws the reminder edge and focus halo. It is told the
+ * whole resolved edge each time and works out panels, displays and fades itself.
+ */
+export interface FocusEdgeBinding {
+  update(snapshot: FocusEdgeSnapshot): FocusEdgeUpdateResult;
+  /** Removes every edge panel and observer and forgets the reminder it framed. */
+  shutdown(): void;
+}
+
 /** macOS Screen Recording access. `access` never prompts; `request` may show the system prompt once. */
 export interface FocusScreenCaptureBinding {
   access(): boolean;
@@ -121,6 +139,8 @@ export interface FocusControllerOptions {
   bar?: FocusBarBinding;
   /** Absent where the native bridge predates the timer bar; the preference is then unavailable. */
   timerBar?: TimerBarBinding;
+  /** Absent where the native bridge predates the edge owner; focus halo is then unavailable. */
+  edge?: FocusEdgeBinding;
   /** Absent when the native bridge can't capture; grayscale then falls back to amber. */
   screenCapture?: FocusScreenCaptureBinding;
   /** Owns system grayscale; absent where the native bridge lacks it. */
@@ -182,6 +202,7 @@ export class FocusController extends EventEmitter {
   private lastEmittedView = "";
   private lastBarSnapshot = "";
   private lastTimerBarRequest = "";
+  private lastEdgeSnapshot = "";
   private readonly now: () => number;
   private readonly idleSeconds: () => number;
   private readonly createSessionId: () => string;
@@ -206,7 +227,6 @@ export class FocusController extends EventEmitter {
       this.currentCapability(),
       document.preferences.experience,
       this.currentScreenCapture(),
-      document.preferences.amberEdge,
       Boolean(options.systemFilter?.available)
     );
     options.overlay?.setActionHandler((line) => this.runAutomaticAction(
@@ -218,6 +238,7 @@ export class FocusController extends EventEmitter {
       () => this.handleBarAction(line)
     ));
     this.restoreSavedSession(document.session);
+    this.syncEdge();
   }
 
   private restoreSavedSession(saved: PersistedFocusSession | null): void {
@@ -267,6 +288,7 @@ export class FocusController extends EventEmitter {
       barPosition: document.barPosition,
       barAvailable: Boolean(this.options.bar),
       timerBarAvailable: Boolean(this.options.timerBar),
+      edgeAvailable: Boolean(this.options.edge),
       recoveredFromInvalidFile: this.options.store.recoveredFromInvalidFile
     };
   }
@@ -313,11 +335,24 @@ export class FocusController extends EventEmitter {
     return this.publish();
   }
 
-  /** Saves the amber edge and applies it to a visible reminder without restarting the session. */
-  setAmberEdge(value: unknown): FocusViewState {
-    const amberEdge = parseOrThrow(z.boolean(), value, "Choose whether to show the amber edge");
-    this.options.store.updatePreferences({ amberEdge });
-    this.dispatch({ type: "amber_edge_changed", now: this.now(), amberEdge });
+  /**
+   * Saves a change to the screen edge and redraws only the edge. Nothing is dispatched, so no
+   * reminder, card, grayscale, capture or session clock is touched. Omitted fields keep their saved
+   * values, so a mode change and a color change sent close together cannot undo each other.
+   */
+  setEdge(value: unknown): FocusViewState {
+    const patch = parseOrThrow(FocusEdgePatchSchema, value, "Check the screen edge settings");
+    if (patch.mode === "focus_halo" && !this.options.edge) {
+      throw new Error("Focus halo isn’t available in this build");
+    }
+    const saved = this.options.store.load().preferences.edge;
+    this.options.store.updatePreferences({
+      edge: {
+        mode: patch.mode ?? saved.mode,
+        color: patch.color ?? saved.color,
+        syncWithProgress: patch.syncWithProgress ?? saved.syncWithProgress
+      }
+    });
     return this.publish();
   }
 
@@ -338,7 +373,7 @@ export class FocusController extends EventEmitter {
         reason: "system_filter_restored"
       });
     }
-    filter.restore();
+    this.systemFilterOn = !filter.restore();
     return this.publish();
   }
 
@@ -461,8 +496,9 @@ export class FocusController extends EventEmitter {
   }
 
   /**
-   * Saves the one color both progress fills use and sends it to whichever bars are on screen. The
-   * session is untouched: no clock moves, so changing the color mid-session costs no time.
+   * Saves the one color both progress fills use and sends it to whichever bars are on screen, and
+   * to the edge while it follows the progress color. The session is untouched: no clock moves, so
+   * changing the color mid-session costs no time.
    */
   setProgressColor(value: unknown): FocusViewState {
     const progressColor = parseOrThrow(
@@ -581,6 +617,7 @@ export class FocusController extends EventEmitter {
     this.hideBar();
     this.options.bar?.setActionHandler(null);
     this.hideTimerBar();
+    this.shutdownEdge();
   }
 
   private handleBarAction(line: string): void {
@@ -700,6 +737,39 @@ export class FocusController extends EventEmitter {
     }
   }
 
+  private syncEdge(snapshot?: FocusEdgeSnapshot): void {
+    const edge = this.options.edge;
+    if (!edge || this.shutDown) return;
+    const desired = snapshot ?? focusEdgeSnapshot(this.machine, this.now(), this.options.store.load().preferences);
+    const restorePending = this.systemFilterOn || this.options.systemFilter?.view().restorePending;
+    const next: FocusEdgeSnapshot = restorePending && desired.halo.kind === "visible"
+      ? { ...desired, halo: { kind: "hidden" } }
+      : desired;
+    const serialized = JSON.stringify(next);
+    if (serialized === this.lastEdgeSnapshot) return;
+    try {
+      this.lastEdgeSnapshot = edge.update(next) === "applied" ? serialized : "";
+    } catch (error) {
+      this.lastEdgeSnapshot = "";
+      console.error("Unable to update the Focus edge", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
+  private shutdownEdge(): void {
+    const edge = this.options.edge;
+    if (!edge) return;
+    this.lastEdgeSnapshot = "";
+    try {
+      edge.shutdown();
+    } catch (error) {
+      console.error("Unable to remove the Focus edge", {
+        name: error instanceof Error ? error.name : "UnknownError"
+      });
+    }
+  }
+
   private sessionRecord(state: FocusMachineState = this.machine): PersistedFocusSession | null {
     const session = sessionView(state);
     if (session.status !== "active") return null;
@@ -796,9 +866,12 @@ export class FocusController extends EventEmitter {
       this.tryWriteSessionRecord(record, "Unable to normalize the restored Focus session");
     }
     this.machine = transition.state;
+    const edge = focusEdgeSnapshot(this.machine, this.now(), this.options.store.load().preferences);
+    if (edge.halo.kind === "hidden") this.syncEdge(edge);
     for (const effect of transition.effects) this.perform(effect);
     this.syncTimer();
     this.syncSystemFilter();
+    this.syncEdge();
   }
 
   private syncSystemFilter(): void {
@@ -807,9 +880,8 @@ export class FocusController extends EventEmitter {
     const wanted = systemFilterWanted(this.machine);
     if (wanted) {
       this.systemFilterOn = filter.apply();
-    } else if (this.systemFilterOn) {
-      filter.restore();
-      this.systemFilterOn = false;
+    } else if (this.systemFilterOn || filter.view().restorePending) {
+      this.systemFilterOn = !filter.restore();
     }
     const effect = this.machine.effect;
     if (!wanted || !effect) return;
@@ -855,7 +927,8 @@ export class FocusController extends EventEmitter {
     }
     let result: FocusOverlayShowResult = "unavailable";
     try {
-      result = this.options.overlay?.show(effect.request) ?? "unavailable";
+      const amberEdge = this.options.store.load().preferences.edge.mode === "distraction";
+      result = this.options.overlay?.show({ ...effect.request, amberEdge }) ?? "unavailable";
     } catch (error) {
       console.error("Unable to show the Focus reminder", {
         name: error instanceof Error ? error.name : "UnknownError"
@@ -939,6 +1012,7 @@ export class FocusController extends EventEmitter {
   private publish(): FocusViewState {
     this.syncBar();
     this.syncTimerBar();
+    this.syncEdge();
     const view = this.view();
     const serialized = JSON.stringify(view);
     if (serialized !== this.lastEmittedView) {

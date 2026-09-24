@@ -452,9 +452,10 @@ final class FocusGrayscaleController {
         }
     }
 
-    /// Exclude this app's overlay panels (grayscale surface, amber edge and card) and the floating
-    /// Focus bar while retaining its normal visible windows, so nothing this app draws over the
-    /// gray image is captured back into it.
+    /// Exclude this app's overlay panels (grayscale surface, screen edge and focus halo, and card)
+    /// and the floating Focus bar while retaining its normal visible windows, so nothing this app
+    /// draws over the gray image is captured back into it. Edge panels stay excluded only because
+    /// they are `FocusOverlayPanel`s.
     private static func contentFilter(display: SCDisplay, content: SCShareableContent) -> SCContentFilter? {
         let processIdentifier = ProcessInfo.processInfo.processIdentifier
         guard let application = content.applications.first(where: { $0.processID == processIdentifier }) else {

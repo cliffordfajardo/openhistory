@@ -2,12 +2,16 @@ import {
   FOCUS_BAR_HEIGHT,
   FOCUS_BAR_PRESENTATIONS,
   FOCUS_BAR_WIDTH,
+  FOCUS_EDGE_COLOR_DEFAULT,
+  FOCUS_EDGE_MODES,
   FOCUS_EXPERIENCES,
   FOCUS_LIMITS,
   FOCUS_PROGRESS_COLOR_DEFAULT,
   parseFocusDomain,
   type FocusBarPosition,
   type FocusBarPresentation,
+  type FocusEdgePatch,
+  type FocusEdgePreferences,
   type FocusExperience,
   type FocusPreferences,
   type FocusSessionEdit,
@@ -83,14 +87,56 @@ export const FocusBarPositionSchema: z.ZodType<FocusBarPosition> = z.object({
 }).strict();
 
 /**
- * The shared progress color. Exactly six ASCII hex digits behind a `#`: no shorthand, no alpha, no
- * color names and no other notation, so every surface can read the same value without guessing.
- * The canonical form is lowercase, which is also what a native color well produces.
+ * The shared progress color, also used for the edge color. Exactly six ASCII hex digits behind a
+ * `#`: no shorthand, no alpha, no color names and no other notation, so every surface can read the
+ * same value without guessing. The canonical form is lowercase, which is also what a native color
+ * well produces.
  */
 export const FocusProgressColorSchema = z.string()
   .max(7)
   .regex(/^#[0-9a-fA-F]{6}$/)
   .transform((value) => value.toLowerCase());
+
+const FocusEdgeModeSchema = z.enum(FOCUS_EDGE_MODES);
+
+export const FocusEdgePreferencesSchema: z.ZodType<FocusEdgePreferences> = z.object({
+  mode: FocusEdgeModeSchema,
+  color: FocusProgressColorSchema,
+  syncWithProgress: z.boolean()
+}).strict();
+
+/** Renderer edit of the edge. Each field is applied on its own; at least one must be given. */
+export const FocusEdgePatchSchema: z.ZodType<FocusEdgePatch> = z.object({
+  mode: FocusEdgeModeSchema.optional(),
+  color: FocusProgressColorSchema.optional(),
+  syncWithProgress: z.boolean().optional()
+}).strict().refine(
+  (value) => value.mode !== undefined || value.color !== undefined || value.syncWithProgress !== undefined,
+  { message: "Change the edge mode, its color or whether it follows the progress color" }
+);
+
+function migrateLegacyEdge(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) || "edge" in value) return value;
+  let enabled: boolean;
+  let rest: object = value;
+  if ("amberEdge" in value) {
+    const legacy = value.amberEdge;
+    if (typeof legacy !== "boolean") return value;
+    enabled = legacy;
+    rest = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "amberEdge"));
+  } else {
+    const experience = "experience" in value ? value.experience : undefined;
+    enabled = experience === undefined || experience === "amber";
+  }
+  return {
+    ...rest,
+    edge: {
+      mode: enabled ? "distraction" : "off",
+      color: FOCUS_EDGE_COLOR_DEFAULT,
+      syncWithProgress: false
+    }
+  };
+}
 
 export const FocusBarWidthSchema = z.number().finite()
   .min(FOCUS_BAR_WIDTH.minimum)
@@ -122,18 +168,13 @@ const DomainListSchema = z.array(DomainRuleSchema)
 /**
  * Stored preferences. Files written before reminder styles existed have no `experience`; they
  * keep every goal and site and read as the original amber reminder. Files written before the edge
- * was separate from grayscale have no `amberEdge`: it stays on only for those that used the amber
- * style, so grayscale choices keep looking the same.
+ * had modes are migrated by `migrateLegacyEdge`, so grayscale choices keep looking the same.
  */
-export const FocusPreferencesSchema: z.ZodType<FocusPreferences> = z.preprocess((value) => {
-  if (!value || typeof value !== "object" || Array.isArray(value) || "amberEdge" in value) return value;
-  const experience = (value as { experience?: unknown }).experience;
-  return { ...value, amberEdge: experience === undefined || experience === "amber" };
-}, z.object({
+export const FocusPreferencesSchema: z.ZodType<FocusPreferences> = z.preprocess(migrateLegacyEdge, z.object({
   domains: DomainListSchema,
   durationMinutes: DurationMinutesSchema,
   experience: FocusExperienceSchema.default("amber"),
-  amberEdge: z.boolean(),
+  edge: FocusEdgePreferencesSchema,
   /** Files written before the floating bar existed get it, matching a fresh install. */
   barPresentation: FocusBarPresentationSchema.default("floating"),
   /** Off for files written before the timer bar existed and for fresh installs alike. */

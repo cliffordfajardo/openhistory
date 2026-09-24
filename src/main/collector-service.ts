@@ -7,6 +7,8 @@ import { loadActivityEvents, parseRawActivityEvent } from "./activity-event-file
 import type { FocusBarShowResult } from "./focus-bar";
 import type {
   FocusBarBinding,
+  FocusEdgeBinding,
+  FocusEdgeUpdateResult,
   FocusOverlayBinding,
   FocusOverlayShowResult,
   FocusScreenCaptureBinding,
@@ -53,6 +55,8 @@ export interface NativeCollectorBinding {
   setFocusBarActionHandler?(handler: ((line: string) => void) | null): void;
   updateTimerBar?(requestJSON: string): number;
   shutdownTimerBar?(): void;
+  updateFocusEdge?(snapshotJSON: string): number;
+  shutdownFocusEdge?(): void;
   screenCaptureAccess?(): boolean;
   requestScreenCaptureAccess?(): boolean;
   systemColorFilterRead?(): SystemColorFilterSettings | null;
@@ -79,6 +83,13 @@ const FOCUS_BAR_RESULTS: Record<number, FocusBarShowResult> = {
 };
 
 const TIMER_BAR_RESULTS: Record<number, TimerBarResult> = {
+  0: "applied",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display"
+};
+
+const FOCUS_EDGE_RESULTS: Record<number, FocusEdgeUpdateResult> = {
   0: "applied",
   1: "invalid_request",
   2: "not_main_thread",
@@ -287,6 +298,28 @@ export class CollectorService extends EventEmitter {
       update: (request) => TIMER_BAR_RESULTS[updateTimerBar.call(native, JSON.stringify(request))] ??
         "invalid_request",
       shutdown: () => shutdownTimerBar.call(native)
+    };
+  }
+
+  /**
+   * The native edge owner, or undefined when the native module predates it. That older module
+   * still draws its own amber reminder edge from each reminder request.
+   */
+  focusEdge(): FocusEdgeBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { updateFocusEdge, shutdownFocusEdge } = native;
+    if (typeof updateFocusEdge !== "function" || typeof shutdownFocusEdge !== "function") {
+      return undefined;
+    }
+    return {
+      update: (snapshot) => FOCUS_EDGE_RESULTS[updateFocusEdge.call(native, JSON.stringify(snapshot))] ??
+        "invalid_request",
+      shutdown: () => shutdownFocusEdge.call(native)
     };
   }
 

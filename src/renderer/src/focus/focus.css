@@ -96,6 +96,9 @@
 .focus-color-well { display: grid; width: 22px; height: 22px; place-items: center; background: conic-gradient(#b86b5c, #c9964a, #5c9e73, #5c84b8, #8a75b8, #b86b5c); border-radius: 50%; }
 .focus-color-well::after { width: 12px; height: 12px; background: var(--swatch); border: 1px solid rgba(255, 255, 255, .8); border-radius: 50%; content: ""; }
 .focus-color-custom input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; opacity: 0; border: 0; }
+.focus-color-swatch:disabled, .focus-color-custom:has(input:disabled) { opacity: .5; }
+.focus-edge { display: grid; gap: 10px; }
+.focus-edge .focus-style-options { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .focus-style-option { display: grid; gap: 4px; padding: 10px 12px; color: inherit; text-align: left; background: rgba(255, 255, 255, .35); border: 1px solid rgba(0, 0, 0, .1); border-radius: 10px; }
 .focus-style-option strong { color: var(--focus-ink); font-size: 12px; }
 .focus-style-option span { color: #777; font-size: 10.5px; line-height: 1.45; }
@@ -215,6 +218,7 @@
 
 @media (max-width: 760px) {
   .focus-style-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .focus-edge .focus-style-options { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 520px) {

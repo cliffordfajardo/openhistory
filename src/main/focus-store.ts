@@ -1,6 +1,7 @@
 import {
   FOCUS_BAR_HEIGHT,
   FOCUS_BAR_WIDTH,
+  FOCUS_EDGE_COLOR_DEFAULT,
   FOCUS_LIMITS,
   FOCUS_PROGRESS_COLOR_DEFAULT,
   type FocusBarPosition,
@@ -39,7 +40,7 @@ export const DEFAULT_FOCUS_PREFERENCES: FocusPreferences = {
   domains: [],
   durationMinutes: 25,
   experience: "amber",
-  amberEdge: true,
+  edge: { mode: "distraction", color: FOCUS_EDGE_COLOR_DEFAULT, syncWithProgress: false },
   barPresentation: "floating",
   showTimerBar: false,
   progressColor: FOCUS_PROGRESS_COLOR_DEFAULT

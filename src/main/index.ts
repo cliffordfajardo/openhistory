@@ -782,11 +782,13 @@ async function initialize(): Promise<void> {
   });
   const focusBar = collector.focusBar();
   const timerBar = collector.timerBar();
+  const focusEdge = collector.focusEdge();
   focus = new FocusController({
     store: new FocusStore(config.dataDirectory),
     overlay: collector.focusOverlay(),
     ...(focusBar ? { bar: focusBar } : {}),
     ...(timerBar ? { timerBar } : {}),
+    ...(focusEdge ? { edge: focusEdge } : {}),
     screenCapture: collector.focusScreenCapture(),
     systemFilter: systemColorFilter,
     setForegroundObservation: (generation) => collector.setForegroundObservation(generation),
@@ -1194,8 +1196,7 @@ async function initialize(): Promise<void> {
   handleTrustedIpc(IPC_CHANNELS.previewFocusReminder, () => focus!.preview());
   handleTrustedIpc(IPC_CHANNELS.setFocusExperience, (_event, experience: unknown) =>
     focus!.setExperience(experience));
-  handleTrustedIpc(IPC_CHANNELS.setFocusAmberEdge, (_event, amberEdge: unknown) =>
-    focus!.setAmberEdge(amberEdge));
+  handleTrustedIpc(IPC_CHANNELS.setFocusEdge, (_event, patch: unknown) => focus!.setEdge(patch));
   handleTrustedIpc(IPC_CHANNELS.restoreFocusSystemColors, () => focus!.restoreSystemColors());
   handleTrustedIpc(IPC_CHANNELS.requestScreenCapture, () => focus!.requestScreenCapture());
   handleTrustedIpc(IPC_CHANNELS.refreshScreenCapture, () => focus!.refreshScreenCapture());

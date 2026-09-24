@@ -36,6 +36,8 @@ extern void openhistory_focus_bar_set_action_callback(
 extern void openhistory_focus_bar_shutdown(void);
 extern int32_t openhistory_timer_bar_update(const char *request_json);
 extern void openhistory_timer_bar_shutdown(void);
+extern int32_t openhistory_focus_edge_update(const char *snapshot_json);
+extern void openhistory_focus_edge_shutdown(void);
 
 static napi_threadsafe_function collector_events = NULL;
 static napi_threadsafe_function focus_actions = NULL;
@@ -246,6 +248,7 @@ static void cleanup_native_bridge(void *argument) {
     openhistory_focus_bar_shutdown();
     openhistory_timer_bar_shutdown();
     openhistory_focus_overlay_shutdown();
+    openhistory_focus_edge_shutdown();
     openhistory_collector_stop();
     focus_bar_actions = NULL;
     focus_actions = NULL;
@@ -415,6 +418,29 @@ static napi_value update_timer_bar(napi_env env, napi_callback_info info) {
 static napi_value shutdown_timer_bar(napi_env env, napi_callback_info info) {
     (void)info;
     openhistory_timer_bar_shutdown();
+    return undefined_value(env);
+}
+
+static napi_value update_focus_edge(napi_env env, napi_callback_info info) {
+    size_t argument_count = 1;
+    napi_value argument;
+    if (napi_get_cb_info(env, info, &argument_count, &argument, NULL, NULL) != napi_ok) return NULL;
+    if (argument_count != 1) {
+        napi_throw_type_error(env, NULL, "updateFocusEdge requires snapshot JSON");
+        return NULL;
+    }
+    char *snapshot_json = copy_utf8_argument(env, argument, "updateFocusEdge snapshot must be JSON text");
+    if (snapshot_json == NULL) return NULL;
+    int32_t result = openhistory_focus_edge_update(snapshot_json);
+    free(snapshot_json);
+    napi_value value;
+    if (napi_create_int32(env, result, &value) != napi_ok) return NULL;
+    return value;
+}
+
+static napi_value shutdown_focus_edge(napi_env env, napi_callback_info info) {
+    (void)info;
+    openhistory_focus_edge_shutdown();
     return undefined_value(env);
 }
 
@@ -629,6 +655,8 @@ NAPI_MODULE_INIT() {
         { "focusFocusBar", NULL, focus_focus_bar, NULL, NULL, NULL, napi_default, NULL },
         { "updateTimerBar", NULL, update_timer_bar, NULL, NULL, NULL, napi_default, NULL },
         { "shutdownTimerBar", NULL, shutdown_timer_bar, NULL, NULL, NULL, napi_default, NULL },
+        { "updateFocusEdge", NULL, update_focus_edge, NULL, NULL, NULL, napi_default, NULL },
+        { "shutdownFocusEdge", NULL, shutdown_focus_edge, NULL, NULL, NULL, napi_default, NULL },
         { "isTrusted", NULL, is_trusted, NULL, NULL, NULL, napi_default, NULL },
         { "requestTrust", NULL, request_trust, NULL, NULL, NULL, napi_default, NULL },
         { "screenCaptureAccess", NULL, screen_capture_access, NULL, NULL, NULL, napi_default, NULL },

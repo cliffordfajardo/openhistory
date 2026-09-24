@@ -126,7 +126,7 @@ const bridge: OpenHistoryBridge = {
   },
   previewFocusReminder: () => ipcRenderer.invoke(IPC_CHANNELS.previewFocusReminder),
   setFocusExperience: (experience) => ipcRenderer.invoke(IPC_CHANNELS.setFocusExperience, experience),
-  setFocusAmberEdge: (amberEdge) => ipcRenderer.invoke(IPC_CHANNELS.setFocusAmberEdge, amberEdge),
+  setFocusEdge: (patch) => ipcRenderer.invoke(IPC_CHANNELS.setFocusEdge, patch),
   restoreFocusSystemColors: () => ipcRenderer.invoke(IPC_CHANNELS.restoreFocusSystemColors),
   requestScreenCaptureAccess: () => ipcRenderer.invoke(IPC_CHANNELS.requestScreenCapture),
   refreshScreenCaptureAccess: () => ipcRenderer.invoke(IPC_CHANNELS.refreshScreenCapture),

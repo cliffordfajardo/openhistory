@@ -14,7 +14,10 @@ adds a calm focus companion on top of OpenHistory's private, local activity coll
   intention, plus **Snooze 5 min** and **Dismiss**. Optionally, grayscale can show only the
   distracting window, that whole display (both captured), or every display (System, through
   macOS Color Filters) in gray,
-  with or without the amber edge (see [Reminder styles](#reminder-styles)).
+  with or without the edge (see [Reminder styles](#reminder-styles)).
+- **An optional focus halo**: instead of the reminder edge, a soft edge can frame every display
+  while a session runs and you are on task, and disappear as soon as a listed site is in front
+  (see [Focus halo](#focus-halo)).
 - **An Activity timeline**: a model-free, chronological view of each recorded day.
 
 Focus **nudges; it never blocks**. Every site stays reachable, and nothing is closed, hidden or
@@ -114,7 +117,8 @@ and none keeps a clock of its own.
 | --- | --- | --- |
 | The countdown | frozen; the session outlives the deadline it started with | keeps running |
 | Reminders | none, and nothing is observed at all | none for 5 minutes |
-| Grayscale / amber edge | a visible reminder is removed, and system grayscale restores your Color Filters | the same |
+| Grayscale / reminder edge | a visible reminder is removed, and system grayscale restores your Color Filters | the same |
+| Focus halo | hidden; after resuming it waits for a fresh foreground check | unaffected: shown while on task, hidden on a listed site |
 | Ending it | **Resume session** continues with exactly the time that was left | **Resume reminders**, or it ends by itself |
 
 Pausing stops the foreground observation entirely, so nothing about the front app is looked at
@@ -222,6 +226,11 @@ While **System grayscale** is on, macOS desaturates everything on screen, so the
 drawn as its gray equivalent until your colors come back. Picking a color changes nothing about
 what is captured or stored.
 
+The screen edge has its own color (see [Reminder styles](#reminder-styles)) from the same six
+swatches and picker. With **Sync with progress color** on, the edge is drawn in the progress color
+instead, so a new progress color recolors a visible edge at once; the edge's own color stays saved
+and comes back when sync is turned off.
+
 ### The menu-bar icon
 
 A running session always has a menu-bar icon, even when the app is set to show in the Dock. That
@@ -262,23 +271,38 @@ Webmail hosts such as `mail.google.com` can trigger a listed-site reminder even 
 activity recording is off. Focus uses the hostname only. Email URL paths, page titles, message
 text and other email activity remain excluded from recorded history under that setting. This
 does not enable detection of native Mail or Outlook apps. If you select Window or Screen
-grayscale, its existing transient screen processing also applies to webmail; System grayscale
-and the amber edge need no screen capture.
+grayscale, its existing transient screen processing also applies to webmail; System grayscale,
+the screen edge and focus halo need no screen capture.
 
 Private-window detection is heuristic and depends on the browser’s exposed accessibility
 information. It is not a universal guarantee across browser versions or languages.
 
 ## Reminder styles
 
-Under **Focus → Reminder style**, the **Amber edge** switch and the **Grayscale** choice are
+Under **Focus → Reminder style**, the **Screen edge** and the **Grayscale** choice are
 independent. Both are saved in `focus.json` and apply immediately, including to a running
-session: a visible reminder is replaced in the new style without waiting for the cooldown, while
-the session's goal, timer, site list, snooze and dismiss quiet period are kept.
+session. A new grayscale choice replaces a visible reminder in the new style without waiting for
+the cooldown. An edge change redraws only the edge: the card, any grayscale and its capture, the
+session's goal, timer, site list, snooze and dismiss quiet period are all left as they are.
 
-- **Amber edge** (on by default): the warm edge described above. It needs no permission beyond
-  Accessibility. Above a captured gray image it is drawn over the gray, and the card above both.
-  Files saved before the switch existed keep their look: it is on for the old amber style and off
-  for the old grayscale styles.
+**Screen edge** has three modes:
+
+- **Off**: no edge. Reminders still show their card and any grayscale.
+- **On distraction** (the default): the soft edge described above, on the display with the listed
+  site, while a reminder shows. Above a captured gray image it is drawn over the gray, and the card
+  above both. Files saved before edge modes existed keep their look: the old `amberEdge` switch
+  becomes **On distraction** when it was on and **Off** when it was off, and files older still have
+  it on only for the old amber style.
+- **Focus halo**: see [Focus halo](#focus-halo).
+
+**Edge color** is used by both edge modes, from the same swatches and custom picker as the
+progress color. The default is the original amber (`#ffad33`, drawn exactly as before, including
+its Increase Contrast variant). **Sync with progress color** draws the edge in the progress color
+while it is on, disables the edge's own picker, and keeps the edge's own color for when it is
+turned off. The edge needs no permission beyond Accessibility.
+
+Grayscale choices:
+
 - **None** (stored as `experience: "amber"`, its name from before the edge was separate): colors
   are unchanged.
 - **Window**: while a reminder shows, only the distracting browser window is shown in
@@ -291,13 +315,13 @@ the session's goal, timer, site list, snooze and dismiss quiet period are kept.
   any OpenHistory Focus panels stay in color above the gray image. It needs macOS Screen
   Recording access.
 - **System** (experimental): macOS Color Filters set to grayscale. Every display turns gray,
-  including the reminder card and amber edge. No Screen Recording, no frames captured. See
+  including the reminder card and the edge. No Screen Recording, no frames captured. See
   [System grayscale](#system-grayscale).
 
 How grayscale works: `FocusGrayscale.swift` captures that display with ScreenCaptureKit at up to
 30 fps (the real cursor stays visible; the captured one is off), desaturates each complete frame
 with Core Image on the GPU and draws it into a Metal layer in a click-through, nonactivating panel
-below the amber edge and the card. The capture filter excludes this app's own overlay panels,
+below the edge and the card. The capture filter excludes this app's own overlay panels,
 including the edge, so they never feed back into the gray image (by excluding the
 app and listing its visible normal windows as exceptions, so the Focus window still appears under
 the gray image). The panel appears only after the first captured frame is rendered; before that,
@@ -335,8 +359,8 @@ Following the window:
   window moved to another Space falls back to amber.
 - The cooldown, snooze, dismiss quiet period, 8 s preview and stop/quit cleanup are unchanged.
 
-When captured grayscale can't run, the reminder shows without it (the card, plus the edge only if
-the switch is on) and the Focus page says why:
+When captured grayscale can't run, the reminder shows without it (the card, plus the edge only in
+**On distraction** mode) and the Focus page says why:
 Screen Recording not allowed, capture unsupported, capture stopped (including revoking access
 while it runs), no frame within 4 s, the display changed, the distracting window couldn't be
 matched or followed exactly, or the window is on more than one display. The whole display is
@@ -354,7 +378,7 @@ unavailable and a saved choice shows the card (and edge, if on) without grayscal
 permission, capture, Shortcut or UI automation is involved.
 
 - The setting is system-wide and persisted: every display turns gray, including the reminder
-  card and amber edge, and it survives until changed back.
+  card and the edge, and it survives until changed back.
 - When a reminder or preview shows, the app reads the current Color Filters settings (on/off and
   filter type) and, before changing anything, saves them to a private restore journal at
   `~/Library/Application Support/OpenHistory Focus/focus-color-filter-restore.json`, outside the
@@ -377,12 +401,56 @@ If the journal is unreadable, the app cannot safely infer your previous settings
 A possible future App Store-friendly alternative is Apple's public Shortcuts Color Filters
 action, run through user-made shortcuts. It is not implemented.
 
+### Focus halo
+
+With **Screen edge → Focus halo**, the edge belongs to the running session instead of to a
+reminder. It frames **every connected display** while the session runs and the latest foreground
+check says you are on task, and it disappears as soon as a listed site is in front. Reminders keep
+working as before — the card, grayscale, Snooze and Dismiss are unchanged — but no edge is drawn
+with them in this mode. Grayscale remains a separate choice. If your own baseline Color Filters
+setting is grayscale, the halo is also desaturated by macOS.
+
+The halo shows only when all of these hold:
+
+- a session is running (not paused, stopped or finished);
+- Focus can notice sites (capture on, privacy notice accepted, Accessibility, Browser URLs, the
+  collector and the native reminder all available — the same readiness reminders need);
+- no test reminder is showing;
+- the latest foreground check belongs to this session's current observation and is at most 3
+  seconds old; and
+- that check is a browser on a site that isn't listed, or an ordinary app that isn't a browser
+  (including OpenHistory Focus itself).
+
+Anything else hides it: a listed site or any of its subdomains, an unreadable address, a private or
+protected context, an excluded app, no front app, a notification overlay, a sleeping display, a
+locked screen, Accessibility or URL capture turned off, the collector stopping, and a missing,
+stale or earlier-session check. Each of these reasons is classified explicitly in
+`src/main/focus-edge.ts`, so a new kind of foreground state cannot show the halo until it is
+classified. Snooze, the dismiss quiet period, the cooldown between reminders and idle time decide
+only whether a reminder card appears, never the halo: a listed site hides the halo even when no
+card will show, and being idle on a safe page leaves it up.
+
+After a pause, a resume, a restart that restores the session, or a collector restart, the halo
+waits for the next fresh check rather than reusing an old one. Changing the site list applies to
+the halo at once. A **Test reminder** sets the halo aside while the preview card (and any
+grayscale) shows, and it returns afterwards only if the foreground check is still fresh and on
+task.
+
+When a listed site appears, the halo is removed before the reminder is shown. When you leave it,
+the reminder is hidden and System grayscale (if it was on) is restored before the halo returns.
+If restoration fails, the halo stays hidden while restoration is retried.
+Switching apps, changing Space or waking the Mac hides the halo at once until a newer foreground
+check arrives, so it never lingers over a context that has not been judged yet; it then comes back
+without fading in again. It is otherwise redrawn only when its color, the displays or the
+accessibility display options change. Nothing new is watched for it: it uses the same foreground
+checks and once-a-second session heartbeat as reminders.
+
 ## Permissions
 
 - **Accessibility** powers OpenHistory's collector and every reminder.
 - **Screen Recording** is used only by the optional Window and Screen grayscale; one grant covers
-  both. The amber edge and System grayscale need
-  no Screen Recording: it picks its display from the front window's Accessibility geometry,
+  both. The screen edge, focus halo and System grayscale need
+  no Screen Recording: the reminder edge picks its display from the front window's Accessibility geometry,
   falling back to on-screen window bounds for that process (bounds are available without Screen
   Recording). Access is checked without prompting. **Grant Screen Recording** asks macOS once per
   launch; afterwards the page offers **Open Settings** and **Check again**. macOS may ask you to
@@ -461,21 +529,28 @@ CollectorService (Node): validate + privacy ──► FocusController ◄── 
                                                    │   ▲       ▲
                          pure focus-state reducer ─┘   │       └── Electron tray (session controls)
                                                    ▼   │ snooze / dismiss / hidden
-                                   FocusOverlay.swift: edge panel + reminder card
+                                   FocusOverlay.swift: reminder card + grayscale
                                                    │   ▲ (nudge + session IDs)
                                                    ▼   │ pause / resume / complete / edit / moved
                                       FocusBar.swift: floating session bar (session ID)
 FocusController ── enabled + session clock + color ──► TimerBar.swift: strip per display
+FocusController ── mode + resolved color + halo ─────► FocusEdge.swift: every edge panel
+FocusOverlay.swift ── reminder shown on display / hidden ──┘ (reminder edge vs focus halo)
 ```
 
 Data shapes (`src/shared/focus.ts`):
 
 - `Goal { id, title, why, currentFocus }`,
   `FocusPreferences { domains, durationMinutes, experience: "amber" | "grayscale_window" |
-  "grayscale_screen" | "grayscale_system", amberEdge, barPresentation: "floating" | "menuBar",
-  showTimerBar, progressColor }`.
-  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`, a missing
-  `amberEdge` as `true` only for the amber style, a missing `showTimerBar` as `false` (the same as
+  "grayscale_screen" | "grayscale_system", edge: { mode: "off" | "distraction" | "focus_halo",
+  color, syncWithProgress }, barPresentation: "floating" | "menuBar", showTimerBar, progressColor }`.
+  `focus.json` stays at version 1; a missing `experience` reads as `"amber"`; a legacy boolean
+  `amberEdge` reads as `edge.mode` `"distraction"` (true) or `"off"` (false) in `#ffad33`, unsynced,
+  and a file with neither gets `"distraction"` only for the amber style. Any other `amberEdge`, or
+  an `edge` that isn't exactly those three valid fields, makes the file invalid like any other
+  malformed preference. Reading never rewrites the file; the next write stores only `edge`. The
+  effective edge color is derived when the edge is drawn (`effectiveFocusEdgeColor`), never copied
+  into `edge.color`. A missing `showTimerBar` reads as `false` (the same as
   a new install), a missing `progressColor` as `"#5c9e73"`, and a missing `barPresentation` as `"floating"`,
   so existing files get the bar exactly as a new install does. `focus.json` also holds
   `barPosition: { x, y } | null`, the bar's saved bottom-left corner in global AppKit points, and
@@ -484,7 +559,23 @@ Data shapes (`src/shared/focus.ts`):
   in points (default 54, between 40 and 20 000; a missing one reads as 54 in the same way). A
   resize writes all three in one file write. They live in the activity-data folder, so "Delete all local data" removes them with
   everything else and the bar comes back at its default size and place.
-- Every reminder request carries `amberEdge`. For `grayscale_system` the native overlay captures
+- The renderer changes the edge with `setFocusEdge(patch)`: any of `mode`, `color` and
+  `syncWithProgress`, at least one, merged into the saved edge in the main process and validated
+  strictly first. It never touches the reducer, so it cannot restart a reminder, grayscale, capture
+  or the session clock. `focus_halo` is refused when the native edge owner is missing, and the view
+  reports `edgeAvailable`.
+- The native edge owner receives `{ mode, color, halo: { kind: "hidden" } | { kind: "visible",
+  generation, sequence } }` through `updateFocusEdge` and is torn down with `shutdownFocusEdge`
+  (also from the bridge's cleanup hook). `color` is already resolved from sync; no site, list or
+  preference detail crosses the bridge. A visible halo names the accepted observation it stands on.
+  `FocusController` derives this snapshot with the pure `focusEdgeSnapshot`
+  (`src/main/focus-edge.ts`) after every transition and preference change and sends it only when it
+  differs from the last one applied; an update that didn't apply is retried on the next call. A
+  hidden snapshot is sent before the transition's reminder effects, and a visible one only after
+  them and after System grayscale has been restored.
+- Every reminder request still carries `amberEdge` (true only in **On distraction** mode) for a
+  native bridge that predates the edge owner; the edge owner ignores it once it has received an
+  edge update. For `grayscale_system` the native overlay captures
   nothing; `SystemColorFilterController` (`src/main/system-color-filter.ts`) is the single,
   synchronous owner of `SystemColorFilterSettings { enabled, type }` through the native
   `SystemColorFilterBinding { read(), write(settings) }` (`systemColorFilterRead` /
@@ -552,17 +643,40 @@ Key rules (`src/main/focus-state.ts`, pure and unit-tested):
 - Pausing a session hides any reminder, restores system grayscale, stops observation (generation 0)
   and forgets evidence. Resuming advances the generation, so only a fresh observation can nudge.
   A pause at or past the deadline completes the session instead of freezing an expired one.
+- Focus halo eligibility (`focusHaloDecision` in `src/main/focus-edge.ts`, pure and unit-tested)
+  reads only the session, capability, preview and fresh evidence, using the same freshness and
+  domain matching as reminders. Unknown evidence is classified by an exhaustive
+  `Record<ForegroundUnknownReason, "show" | "hide">`; only `other_application` and `own_process`
+  show. It never reads the reminder, snooze, dismiss, cooldown or idle state, and it keeps no latch
+  of its own.
 
-Native reminder (`native/bridge/FocusOverlay.swift`, in the existing dylib):
+Native reminder (`native/bridge/FocusOverlay.swift` and `native/bridge/FocusEdge.swift`, in the
+existing dylib):
 
-- Two `NSPanel`s, borderless and `.nonactivatingPanel`, with `canBecomeKey`/`canBecomeMain` false.
-  `isFloatingPanel` is set **before** the level (setting it resets the level), then
-  `statusBar` level, `canJoinAllSpaces` and `fullScreenAuxiliary`. Shown with
-  `orderFrontRegardless`; the app is never activated and no window becomes key.
-- The edge panel ignores the mouse and is hidden from Accessibility. It draws a 2.5 pt rounded
-  amber perimeter with a soft inward shadow about 60 pt deep and a clear center.
+- Reminder and edge panels are `FocusOverlayPanel`s, borderless and `.nonactivatingPanel`, with
+  `canBecomeKey`/`canBecomeMain` false. `isFloatingPanel` is set **before** the level (setting it
+  resets the level), then `statusBar` level (+1 for edges, +2 for the card, so the timer bar sits
+  below both), `canJoinAllSpaces` and `fullScreenAuxiliary`. Shown with `orderFrontRegardless`;
+  the app is never activated and no window becomes key. Being `FocusOverlayPanel`s is what keeps
+  edge panels out of the captured grayscale image.
+- `FocusOverlayController` owns the card and both captured-grayscale controllers. It only tells
+  `FocusEdgeController` which reminder is showing on which display, and when it hides.
+- `FocusEdgeController` is the only owner of edge panels. With no edge update from the app yet it
+  behaves as before: a reminder whose request asks for `amberEdge` gets the amber edge. After an
+  update, the mode decides: **Off** draws nothing (panels are closed, but the showing reminder is
+  remembered, so switching back to **On distraction** frames it without re-showing the card);
+  **On distraction** frames the reminder's display; **Focus halo** frames every connected display
+  (one panel per `CGDirectDisplayID`, reconciled on display changes) while the snapshot says so and
+  no reminder is registered. Application activation, Space changes and wake hide a showing halo and
+  remember the observation it stood on; only a snapshot naming a different observation shows it
+  again. Unchanged snapshots neither redraw nor reorder panels, and fade completions are guarded
+  by per-panel tokens so a stale one cannot remove a panel that was shown again.
+- The edge panel ignores the mouse and is hidden from Accessibility. `FocusGlowView` draws a 2.5 pt
+  rounded perimeter in the chosen color (the exact original amber for the default) with a soft
+  inward shadow about 60 pt deep and a clear center, the same in both modes.
 - The card has native, VoiceOver-labeled buttons that work without making the panel key. Clicks
-  on the card are excluded from pointer capture.
+  on the card are excluded from pointer capture. Its small amber status dot does not follow the
+  edge color.
 - Reduce Motion (no fade), Reduce Transparency (solid edge and card) and Increase Contrast
   (thicker edge, dark keyline, opaque card) are read at show time and update live.
 - Before showing, the expected process must still be frontmost. A display disconnect hides the
@@ -665,8 +779,11 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
   rejected; it deliberately never sends a valid snapshot or calls `focusFocusBar`, so no panel is
   put on screen and no focus is taken. For the timer bar it checks the same way that `updateTimerBar`
   and `shutdownTimerBar` exist and that malformed requests (bad JSON, no preference, two clocks at
-  once, no length) are rejected, again without ever drawing one. Only event kinds and reasons are
-  printed.
+  once, no length) are rejected, again without ever drawing one. For the edge owner it checks that
+  `updateFocusEdge` and `shutdownFocusEdge` exist, that malformed snapshots (bad JSON, an unknown
+  mode, a color that isn't `#rrggbb`, a visible halo without its observation or outside focus halo
+  mode, a hidden halo carrying one) are rejected, and that hidden and off snapshots apply; it never
+  sends a visible halo. Only event kinds and reasons are printed.
 - `sample-app-resources.sh` reads `ps` statistics only. Run it idle and during a session.
 - `npm run test:grayscale-gpu` renders synthetic pixels through the production GPU renderer and
   checks grayscale and orientation. Window geometry (Retina crops, negative display origins,
@@ -682,9 +799,21 @@ sh scripts/sample-app-resources.sh "OpenHistory Focus" 120 > resources.csv
 - Manual check for System grayscale (packaged app, Screen Recording not granted): choose
   **System** and press **Test reminder**. Every display, the card and the edge should turn gray,
   then return to the earlier Color Filters settings about 8 s later. Repeat with a different
-  filter already on; it should come back. Toggle **Amber edge** during a session reminder: the
-  edge should appear or disappear without the session restarting. Quit while a reminder is gray:
-  colors should return before the app exits.
+  filter already on; it should come back. Switch **Screen edge** between **Off** and **On
+  distraction** during a session reminder: the edge should appear or disappear without the card,
+  the gray or the session restarting. Quit while a reminder is gray: colors should return before
+  the app exits.
+- Manual checks for focus halo (packaged app): choose **Focus halo** and start a session. The halo
+  should appear on every display only after the first check on an unlisted site or a non-browser
+  app, and disappear the moment a listed site is in front — also while snoozed and right after a
+  dismiss. Leave the site: the card should go first, then the halo return. Pause (it goes),
+  resume (it returns only after a check), stop (it goes). Change the edge color, turn sync on,
+  change the progress color, and switch modes while a reminder shows: the countdown, the card and
+  any grayscale must stay exactly as they were. **Test reminder** should show the card without a
+  halo and give the halo back afterwards. Unplug and plug a display, change Space, sleep and wake,
+  and quit: no halo panel should be left behind. Try Reduce Motion, Reduce Transparency and
+  Increase Contrast. Its behaviour over full-screen apps and in Stage Manager is exactly what this
+  check is for — it is not assumed.
 
 - Manual checks for the floating bar (packaged app): start a session and confirm the bar appears
   bottom centre without the app coming forward, that hovering reveals the controls without the bar
@@ -734,7 +863,11 @@ saved-session validation, running and paused restore, a session that expired whi
 closed, a clean stop clearing the record against a quit keeping it, evidence from before a restart
 being rejected, and the countdown not rewriting the file each second,
 snooze, dismiss, cooldown, re-entry, stale and out-of-order evidence, stale native actions,
-unknown evidence, stop, pause and restart, day reads well beyond 250 events, midnight privacy,
+unknown evidence, stop, pause and restart, the edge preference migration and validation, focus
+halo eligibility for every unknown reason, its independence from snooze, dismiss, cooldown and
+idle, hiding the halo before a reminder shows and restoring it only after the reminder and System
+grayscale are gone, edge changes that never restart a reminder or clock, progress-color sync,
+the edge owner's feature detection, day reads well beyond 250 events, midnight privacy,
 gap labels, truncation limits, path traversal and symlinked files.
 
 ## Known limits
@@ -768,8 +901,14 @@ gap labels, truncation limits, path traversal and symlinked files.
   rectangle is also grayed. Popups extending outside that rectangle may remain in color.
 - System grayscale relies on private, unsupported macOS calls that may stop working. It affects
   every display. A crash or force quit while it is on leaves the screen gray until the next
-  launch restores the journal. Changing the amber edge replaces a visible reminder, which briefly
-  restarts captured grayscale.
+  launch restores the journal.
+- Focus halo has automated coverage of its policy, ordering and bridge contract only; it has not
+  been verified live. It frames every connected display, not only the one in front. It fails
+  closed, so it can blink off while the next foreground check is taken — after an app switch,
+  Space change or wake, when a check is late, or on an unreadable address — and it is off whenever
+  Focus cannot notice sites. Full-screen apps, Stage Manager and multi-display arrangements need
+  manual verification. With a native bridge that predates the edge owner, focus halo and edge
+  colors are unavailable and the reminder edge keeps its original amber.
 - The floating bar has been checked in the installed app. Its window is only as large as the capsule, but
   whether the area just outside its rounded corners passes clicks through to the app underneath is
   not claimed without runtime evidence: an `NSView` returning nil from `hitTest` does not by itself

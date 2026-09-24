@@ -264,3 +264,40 @@ relaunch. Reset Height returned to 54, preserving the 360-point width. The exact
 automation could read and activate the panel's controls but failed coordinate drags with
 `windowNotFoundAtPosition`, so this run does not claim verified physical top/bottom/corner drags.
 Other macOS versions and physical display transitions remain unverified.
+
+
+## Focus halo and edge colors — 24 September 2026
+
+Validated on macOS 26.6.2 arm64 with one built-in display.
+
+- Typechecking, 413 TypeScript tests, 69 Swift tests, six-path inference preservation,
+  distribution/public-repository checks, native bridge smoke, the existing grayscale GPU fixture,
+  Electron/native release builds and strict development-signature verification pass.
+- `npm run fixture:focus-edge` builds a standalone app in the temporary directory. Run
+  `"${TMPDIR:-/tmp}/FocusEdgePresentationFixture.app/Contents/MacOS/FocusEdgePresentationFixture"`
+  to exercise the real production edge and reminder panels. It passed **233 assertions**:
+  original amber pixels, all six presets/custom colors, transparent center/inward glow,
+  live recolor, reminder registration across off/on, nonactivating/click-through flags,
+  foreground/Space/wake invalidation, ordered observation recovery, stale fades and cleanup.
+  It uses capture shims and local bitmap readback, not screen capture or macOS settings changes.
+- A reproduced stale-token bug was fixed: after native context invalidation, only a
+  lexicographically newer generation/sequence can restore the halo. Older observations and
+  notifications cannot lower the watermark. Off releases edge panels and notification observers.
+- Controller coverage verifies that a listed site hides the halo even during snooze/dismiss/
+  cooldown, previews suppress it, mode/color edits leave card/capture/session clocks untouched,
+  and a failed system-color restoration keeps the halo hidden until a successful retry.
+- Preferences migrate from the old amber switch without losing goals/sites/session/geometry.
+  Sync derives the edge color from the progress color and preserves the independent edge color.
+
+Installed-app checks verified migration preserved goals, sites, geometry and the existing
+System grayscale choice. Preset selection, the custom picker, sync on/off, progress-color
+following and independent-color restoration worked; the edge mode, custom color and sync
+preference persisted through restart. WindowServer reported the full-display
+edge panel above normal windows during a running session. Completion removed the session;
+the validation session was stopped. Desktop automation could not keep the YouTube test tab
+foreground while the desktop was in use, so the full installed distraction/grayscale handoff
+awaits user confirmation; controller and native lifecycle coverage above is automated evidence.
+
+Physical multiple-display reconnects, mixed scaling, Stage Manager, fullscreen applications,
+other macOS releases and actual sleep/wake remain manual validation items. Fixture notification
+and window-flag checks do not establish visibility in every WindowServer configuration.

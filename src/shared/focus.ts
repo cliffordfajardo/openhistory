@@ -45,11 +45,11 @@ export interface GoalDraft {
 }
 
 /**
- * Which grayscale a reminder uses; the amber edge is the separate `amberEdge` preference. `amber`
- * is the stored name for no grayscale, kept from before the two were independent.
+ * Which grayscale a reminder uses; the screen edge is the separate `edge` preference. `amber` is
+ * the stored name for no grayscale, kept from before the two were independent.
  * `grayscale_window` shows only the distracting window in grayscale. `grayscale_screen` shows the
  * display that holds the distracting window in grayscale. `grayscale_system` switches macOS Color
- * Filters to grayscale through a private system setting; that affects every display, the amber
+ * Filters to grayscale through a private system setting; that affects every display, the screen
  * edge included, and needs no Screen Recording access.
  */
 export const FOCUS_EXPERIENCES = ["amber", "grayscale_window", "grayscale_screen", "grayscale_system"] as const;
@@ -69,9 +69,9 @@ export type FocusBarPresentation = (typeof FOCUS_BAR_PRESENTATIONS)[number];
 export const FOCUS_PROGRESS_COLOR_DEFAULT = "#5c9e73";
 
 /**
- * The named shortcuts the Focus page offers. They are ordinary values, not a second kind of
- * setting: a swatch reads as chosen when the saved color equals it, and a color picked by hand
- * that happens to match one shows that swatch as chosen too.
+ * The named shortcuts the Focus page offers for the progress and edge colors alike. They are
+ * ordinary values, not a second kind of setting: a swatch reads as chosen when the saved color
+ * equals it, and a color picked by hand that happens to match one shows that swatch as chosen too.
  */
 export const FOCUS_PROGRESS_COLOR_PRESETS = [
   { name: "Blue", value: "#5c84b8" },
@@ -81,6 +81,28 @@ export const FOCUS_PROGRESS_COLOR_PRESETS = [
   { name: "Amber", value: "#c9964a" },
   { name: "Gray", value: "#8a8f96" }
 ] as const;
+
+/**
+ * When the screen edge shows. `distraction` is the original edge: it frames the display with a
+ * listed site while a reminder shows. `focus_halo` frames every connected display while a running
+ * session has fresh evidence that the foreground is on task, and disappears on a listed site.
+ */
+export const FOCUS_EDGE_MODES = ["off", "distraction", "focus_halo"] as const;
+export type FocusEdgeMode = (typeof FOCUS_EDGE_MODES)[number];
+
+/** The amber the edge has always been drawn in, as the nearest opaque `#rrggbb` value. */
+export const FOCUS_EDGE_COLOR_DEFAULT = "#ffad33";
+
+export interface FocusEdgePreferences {
+  mode: FocusEdgeMode;
+  /** The edge's own color. Following the progress color never overwrites it. */
+  color: string;
+  /** Draw the edge in the progress color, read whenever the edge is drawn. */
+  syncWithProgress: boolean;
+}
+
+/** A change to the edge preference. Omitted fields keep their saved values. */
+export type FocusEdgePatch = Partial<FocusEdgePreferences>;
 
 /** Bottom-left corner of the floating bar in global AppKit points (y up). */
 export interface FocusBarPosition {
@@ -119,8 +141,8 @@ export interface FocusPreferences {
   domains: string[];
   durationMinutes: number;
   experience: FocusExperience;
-  /** Warm edge around the display, independent of grayscale. */
-  amberEdge: boolean;
+  /** Colored edge around the display, independent of grayscale. */
+  edge: FocusEdgePreferences;
   barPresentation: FocusBarPresentation;
   /**
    * The strip across the menu region of every display that shrinks as the session runs. Off unless
@@ -132,6 +154,11 @@ export interface FocusPreferences {
    * covers the floating bar and the timer bar; each surface keeps its own opacity.
    */
   progressColor: string;
+}
+
+/** The color the edge is drawn in: the progress color while synced, otherwise its own. */
+export function effectiveFocusEdgeColor(preferences: Pick<FocusPreferences, "edge" | "progressColor">): string {
+  return preferences.edge.syncWithProgress ? preferences.progressColor : preferences.edge.color;
 }
 
 /**
@@ -298,6 +325,11 @@ export interface FocusViewState {
   barAvailable: boolean;
   /** The native timer bar exists in this build; without it the preference cannot be honored. */
   timerBarAvailable: boolean;
+  /**
+   * The native edge owner exists in this build. Without it only the reminder edge in its original
+   * amber can show, and focus halo cannot be chosen.
+   */
+  edgeAvailable: boolean;
   recoveredFromInvalidFile: boolean;
 }
 

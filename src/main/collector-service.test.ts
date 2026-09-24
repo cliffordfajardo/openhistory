@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { CollectorService, type NativeCollectorBinding } from "./collector-service";
+import type { FocusEdgeSnapshot } from "./focus-edge";
 import { FOREGROUND_EVIDENCE_PREFIX } from "./foreground-evidence";
 import { DEFAULT_COLLECTION_SETTINGS } from "./settings-store";
 
@@ -314,6 +315,35 @@ test("exposes the timer bar on its own, independently of the floating bar", asyn
     session: { endsAtEpochSeconds: 1_800_001_500, pausedRemainingSeconds: null, totalSeconds: 1_500 }
   }, "no goal, intention or site ever reaches the timer bar");
   timerBar.shutdown();
+  assert.equal(shutdowns, 1);
+});
+
+test("exposes the edge owner only when the bridge has both of its calls", async (context) => {
+  const directory = await testDirectory(context);
+  const partial = Object.assign(new FakeNativeCollector(), { updateFocusEdge: () => 0 });
+  assert.equal(new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, partial).focusEdge(), undefined,
+    "an older bridge could not remove the panels again");
+
+  const requests: string[] = [];
+  let shutdowns = 0;
+  const native = Object.assign(new FakeNativeCollector(), {
+    updateFocusEdge: (json: string) => {
+      requests.push(json);
+      return requests.length === 1 ? 0 : 3;
+    },
+    shutdownFocusEdge: () => { shutdowns += 1; }
+  });
+  const edge = new CollectorService(directory, DEFAULT_COLLECTION_SETTINGS, native).focusEdge();
+  assert(edge);
+  const snapshot: FocusEdgeSnapshot = {
+    mode: "focus_halo",
+    color: "#8a75b8",
+    halo: { kind: "visible", generation: 2, sequence: 7 }
+  };
+  assert.equal(edge.update(snapshot), "applied");
+  assert.equal(edge.update(snapshot), "no_display");
+  assert.deepEqual(JSON.parse(requests[0]!), snapshot, "no site, list or saved preference reaches the edge");
+  edge.shutdown();
   assert.equal(shutdowns, 1);
 });
 

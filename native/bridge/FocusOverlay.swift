@@ -20,7 +20,8 @@ struct FocusOverlayRequest: Decodable {
     /// "grayscale_system". Color Filters are switched by the app outside this overlay, so
     /// "grayscale_system" captures nothing here.
     let experience: String?
-    /// Whether to draw the amber edge; absent means yes, as before the edge was separate.
+    /// Whether to draw the amber edge; absent means yes, as before the edge was separate. The edge
+    /// owner stops reading it once the app sends it an edge update.
     let amberEdge: Bool?
     /// The listed site rule a window-only reminder is for; its window is grayed only while fresh
     /// foreground evidence from that window matches it.
@@ -76,12 +77,10 @@ struct FocusOverlayAppearance: Equatable {
 
 private enum FocusOverlayStyle {
     static let fadeDuration: TimeInterval = 0.6
-    static let glowDepth: CGFloat = 60
-    static let cornerRadius: CGFloat = 12
     static let cardSize = NSSize(width: 520, height: 88)
     static let cardTopInset: CGFloat = 14
-    static let amber = CGColor(srgbRed: 1.0, green: 0.68, blue: 0.2, alpha: 1)
-    static let contrastAmber = CGColor(srgbRed: 1.0, green: 0.6, blue: 0.0, alpha: 1)
+    static let amber = FocusEdgeStyle.amber
+    static let contrastAmber = FocusEdgeStyle.contrastAmber
 }
 
 final class FocusOverlayPanel: NSPanel {
@@ -109,74 +108,6 @@ final class FocusOverlayPanel: NSPanel {
         isExcludedFromWindowsMenu = true
         animationBehavior = .none
         alphaValue = 0
-    }
-}
-
-final class FocusGlowView: NSView {
-    var appearanceOptions = FocusOverlayAppearance(
-        reduceMotion: false,
-        reduceTransparency: false,
-        increaseContrast: false
-    ) { didSet { if oldValue != appearanceOptions { needsDisplay = true } } }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
-        setAccessibilityElement(false)
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    override var isOpaque: Bool { false }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
-        context.clear(bounds)
-        let options = appearanceOptions
-        let color = options.increaseContrast ? FocusOverlayStyle.contrastAmber : FocusOverlayStyle.amber
-        let radius = FocusOverlayStyle.cornerRadius
-        let edge = CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil)
-        context.addPath(edge)
-        context.clip()
-
-        if !options.reduceTransparency {
-            context.saveGState()
-            let frame = CGMutablePath()
-            frame.addRect(bounds.insetBy(dx: -FocusOverlayStyle.glowDepth * 4, dy: -FocusOverlayStyle.glowDepth * 4))
-            frame.addPath(edge)
-            context.setShadow(
-                offset: .zero,
-                blur: FocusOverlayStyle.glowDepth,
-                color: color.copy(alpha: options.increaseContrast ? 0.8 : 0.55)
-            )
-            context.setFillColor(color)
-            context.addPath(frame)
-            context.fillPath(using: .evenOdd)
-            context.restoreGState()
-        }
-
-        let perimeter: CGFloat = options.increaseContrast ? 5 : (options.reduceTransparency ? 4 : 2.5)
-        context.addPath(edge)
-        context.setStrokeColor(color.copy(alpha: options.reduceTransparency || options.increaseContrast ? 1 : 0.9) ?? color)
-        // Half of a stroke centered on the edge falls outside the clip.
-        context.setLineWidth(perimeter * 2)
-        context.strokePath()
-
-        if options.increaseContrast {
-            let inset = perimeter + 0.75
-            let inner = CGPath(
-                roundedRect: bounds.insetBy(dx: inset, dy: inset),
-                cornerWidth: max(0, radius - perimeter),
-                cornerHeight: max(0, radius - perimeter),
-                transform: nil
-            )
-            context.addPath(inner)
-            context.setStrokeColor(CGColor(gray: 0, alpha: 0.85))
-            context.setLineWidth(1.5)
-            context.strokePath()
-        }
     }
 }
 
@@ -356,9 +287,7 @@ final class FocusCardView: NSView {
 final class FocusOverlayController: NSObject {
     static let shared = FocusOverlayController()
 
-    private var glowPanel: FocusOverlayPanel?
     private var cardPanel: FocusOverlayPanel?
-    private var glowView: FocusGlowView?
     private var cardView: FocusCardView?
     private var current: FocusOverlayRequest?
     private var currentDisplay: CGDirectDisplayID?
@@ -393,17 +322,22 @@ final class FocusOverlayController: NSObject {
         installObserversIfNeeded()
         FocusWindowGrayscaleController.shared.stop()
         FocusGrayscaleController.shared.stop()
-        let (glow, card, glowView, cardView) = ensurePanels()
+        let (card, cardView) = ensurePanels()
         presentationToken &+= 1
         let cardWasVisible = card.isVisible
         current = request
         currentDisplay = displayIdentifier(screen)
 
         let options = FocusOverlayAppearance.current
-        glowView.appearanceOptions = options
         cardView.apply(options)
         cardView.configure(title: request.title, message: request.message, preview: request.preview)
-        layout(glow: glow, card: card, glowView: glowView, cardView: cardView, on: screen)
+        layout(card: card, cardView: cardView, on: screen)
+        // Registered before grayscale starts, so a hide it causes also releases the edge.
+        FocusEdgeController.shared.reminderDidShow(
+            id: request.nudgeId,
+            displayID: currentDisplay,
+            legacyEdge: request.showsAmberEdge
+        )
         card.ignoresMouseEvents = false
         cardInteractiveUntil = .distantFuture
 
@@ -457,28 +391,8 @@ final class FocusOverlayController: NSObject {
             case _?: result = .shownFallbackUnavailable
             }
         }
-        if request.showsAmberEdge {
-            presentGlow(glow, options: options)
-        } else {
-            glow.alphaValue = 0
-            glow.orderOut(nil)
-        }
         NSAccessibility.post(element: cardView, notification: .layoutChanged)
         return result
-    }
-
-    private func presentGlow(_ glow: FocusOverlayPanel, options: FocusOverlayAppearance) {
-        if !glow.isVisible { glow.alphaValue = options.reduceMotion ? 1 : 0 }
-        glow.orderFrontRegardless()
-        guard !options.reduceMotion else {
-            glow.alphaValue = 1
-            return
-        }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = FocusOverlayStyle.fadeDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            glow.animator().alphaValue = 1
-        }
     }
 
     private func grayscaleEvent(_ event: FocusGrayscaleEvent, nudgeId: String) {
@@ -506,24 +420,21 @@ final class FocusOverlayController: NSObject {
         presentationToken &+= 1
         let token = presentationToken
         cardInteractiveUntil = Date().addingTimeInterval(1)
-        guard let glow = glowPanel, let card = cardPanel else { return }
+        FocusEdgeController.shared.reminderDidHide(id: request.nudgeId, immediate: immediate)
+        guard let card = cardPanel else { return }
         card.ignoresMouseEvents = true
         if immediate || FocusOverlayAppearance.current.reduceMotion {
-            glow.alphaValue = 0
             card.alphaValue = 0
-            glow.orderOut(nil)
             card.orderOut(nil)
             return
         }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = FocusOverlayStyle.fadeDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            glow.animator().alphaValue = 0
             card.animator().alphaValue = 0
         }, completionHandler: {
             MainActor.assumeIsolated {
                 guard FocusOverlayController.shared.presentationToken == token else { return }
-                glow.orderOut(nil)
                 card.orderOut(nil)
             }
         })
@@ -558,11 +469,8 @@ final class FocusOverlayController: NSObject {
             NSWorkspace.shared.notificationCenter.removeObserver(self)
             observersInstalled = false
         }
-        glowPanel?.close()
         cardPanel?.close()
-        glowPanel = nil
         cardPanel = nil
-        glowView = nil
         cardView = nil
         actionCallback = nil
         actionContext = nil
@@ -602,15 +510,10 @@ final class FocusOverlayController: NSObject {
         String(decoding: data, as: UTF8.self).withCString { callback($0, actionContext) }
     }
 
-    private func ensurePanels() -> (FocusOverlayPanel, FocusOverlayPanel, FocusGlowView, FocusCardView) {
-        if let glowPanel, let cardPanel, let glowView, let cardView {
-            return (glowPanel, cardPanel, glowView, cardView)
+    private func ensurePanels() -> (FocusOverlayPanel, FocusCardView) {
+        if let cardPanel, let cardView {
+            return (cardPanel, cardView)
         }
-        let glow = FocusOverlayPanel(clickThrough: true, levelOffset: 1)
-        let glowView = FocusGlowView(frame: .zero)
-        glow.contentView = glowView
-        glow.setAccessibilityElement(false)
-
         let card = FocusOverlayPanel(clickThrough: false, levelOffset: 2)
         let cardView = FocusCardView(
             onSnooze: { MainActor.assumeIsolated { FocusOverlayController.shared.handleButton("snooze") } },
@@ -619,24 +522,12 @@ final class FocusOverlayController: NSObject {
         card.contentView = cardView
         card.setAccessibilityTitle("Focus reminder")
 
-        glowPanel = glow
         cardPanel = card
-        self.glowView = glowView
         self.cardView = cardView
-        return (glow, card, glowView, cardView)
+        return (card, cardView)
     }
 
-    private func layout(
-        glow: FocusOverlayPanel,
-        card: FocusOverlayPanel,
-        glowView: FocusGlowView,
-        cardView: FocusCardView,
-        on screen: NSScreen
-    ) {
-        glow.setFrame(screen.frame, display: false)
-        glowView.frame = NSRect(origin: .zero, size: screen.frame.size)
-        glowView.needsDisplay = true
-
+    private func layout(card: FocusOverlayPanel, cardView: FocusCardView, on screen: NSScreen) {
         let visible = screen.visibleFrame
         let width = min(FocusOverlayStyle.cardSize.width, visible.width - 48)
         let height = FocusOverlayStyle.cardSize.height
@@ -686,12 +577,12 @@ final class FocusOverlayController: NSObject {
         guard let request = current else { return }
         guard let display = currentDisplay,
               let screen = NSScreen.screens.first(where: { displayIdentifier($0) == display }),
-              let glow = glowPanel, let card = cardPanel, let glowView, let cardView else {
+              let card = cardPanel, let cardView else {
             hide(nudgeId: request.nudgeId, immediate: true)
             report(action: "hidden", request: request, reason: "display_changed")
             return
         }
-        layout(glow: glow, card: card, glowView: glowView, cardView: cardView, on: screen)
+        layout(card: card, cardView: cardView, on: screen)
         if FocusWindowGrayscaleController.shared.isActive {
             FocusWindowGrayscaleController.shared.geometryMayHaveChanged()
         } else {
@@ -722,10 +613,8 @@ final class FocusOverlayController: NSObject {
 
     @objc private func accessibilityOptionsChanged() {
         let options = FocusOverlayAppearance.current
-        glowView?.appearanceOptions = options
         cardView?.apply(options)
-        if options.reduceMotion, let request = current {
-            if request.showsAmberEdge { glowPanel?.alphaValue = 1 }
+        if options.reduceMotion, current != nil {
             cardPanel?.alphaValue = 1
         }
     }
