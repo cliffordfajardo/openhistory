@@ -238,3 +238,29 @@ of that custom color after quitting and relaunching. The persisted session ID, d
 were unchanged by installation, color changes and restart. Escape canceled the picker selection;
 Return committed it. The original Green preset was restored after testing. The compact swatches,
 selection ring/check, custom control and copy were inspected in the installed dark-mode window.
+
+## Floating-bar height and corner resizing
+
+Top and bottom edges resize height; corners resize both dimensions. The opposite edges remain
+anchored. Height defaults to 54 points and can shrink to 40 points while retaining readable labels
+and 28-point controls. Saved geometry includes height, and older documents migrate to 54 points.
+Reset Height restores 54 without changing the requested width. Display clipping does not replace
+the saved size of an untouched axis, including straight-axis corner drags.
+
+Typechecking, 387 TypeScript tests, 69 Swift tests, native release compilation, native bridge
+smoke, distribution checks, public-repository checks, Electron build and signed packaging passed.
+A native presentation fixture using the production views measured 40- and 120-point panels,
+content and fills. Controls fit and remain hittable; all eight edge/corner hit regions select the
+correct handle. Running progress continues, paused progress remains frozen, and foreground and
+key windows do not change. The fixture also drove production mouseDown, two mouseDragged events,
+and mouseUp for all eight handles: top height 120→150, bottom 120→90, top-left 460×120→424×150,
+and bottom-right 460×120→496×90. Opposite edges stayed anchored. Each gesture emitted exactly
+one complete resized callback on release; post-release drag events did nothing. These are local
+synthetic events, not physical desktop input or WindowServer routing.
+
+Installed on macOS 26.6.2 with the existing signing identity. A 40-point height survived quit and
+relaunch. Reset Height returned to 54, preserving the 360-point width. The exact session object
+(including deadline and duration) stayed unchanged, and original geometry was restored. Desktop
+automation could read and activate the panel's controls but failed coordinate drags with
+`windowNotFoundAtPosition`, so this run does not claim verified physical top/bottom/corner drags.
+Other macOS versions and physical display transitions remain unverified.

@@ -131,6 +131,10 @@ try {
   })), 1, "a bar position far outside any display must be rejected");
   assert.equal(bridge.updateFocusBar(JSON.stringify({ ...barSnapshot, width: 10 })), 1,
     "a bar narrower than the minimum width must be rejected");
+  assert.equal(bridge.updateFocusBar(JSON.stringify({ ...barSnapshot, height: 10 })), 1,
+    "a bar shorter than the minimum height must be rejected");
+  assert.equal(bridge.updateFocusBar(JSON.stringify({ ...barSnapshot, height: 1e9 })), 1,
+    "a bar taller than the maximum height must be rejected");
   bridge.hideFocusBar();
   bridge.setFocusBarActionHandler(() => undefined);
   bridge.setFocusBarActionHandler(null);

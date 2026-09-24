@@ -71,43 +71,152 @@ private let external = CGRect(x: -1_920, y: 900, width: 1_920, height: 1_080)
             "a bar with no saved corner is trimmed too, instead of hanging off the default position")
 }
 
+private func drag(x: CGFloat = 0, y: CGFloat = 0) -> CGSize {
+    CGSize(width: x, height: y)
+}
+
 @Test func draggingTheTrailingEdgeMovesOnlyThatEdge() {
-    let current = CGRect(x: 200, y: 300, width: 460, height: 54)
+    let start = CGRect(x: 200, y: 300, width: 460, height: 54)
     let wider = FocusBarPlacement.resizedFrame(
-        current: current, edge: .trailing, deltaX: 300, visibleFrames: [builtIn]
+        start: start, handle: .horizontal(.trailing), delta: drag(x: 300), visibleFrames: [builtIn]
     )
     #expect(wider == CGRect(x: 200, y: 300, width: 760, height: 54))
 
     let narrower = FocusBarPlacement.resizedFrame(
-        current: current, edge: .trailing, deltaX: -1_000, visibleFrames: [builtIn]
+        start: start, handle: .horizontal(.trailing), delta: drag(x: -1_000), visibleFrames: [builtIn]
     )
     #expect(narrower == CGRect(x: 200, y: 300, width: FocusBarPlacement.minimumWidth, height: 54),
             "a bar never shrinks past the width its controls and goal need")
 }
 
 @Test func draggingTheLeadingEdgeHoldsTheRightEdgeStill() {
-    let current = CGRect(x: 400, y: 300, width: 460, height: 54)
+    let start = CGRect(x: 400, y: 300, width: 460, height: 54)
     let wider = FocusBarPlacement.resizedFrame(
-        current: current, edge: .leading, deltaX: -240, visibleFrames: [builtIn]
+        start: start, handle: .horizontal(.leading), delta: drag(x: -240), visibleFrames: [builtIn]
     )
     #expect(wider == CGRect(x: 160, y: 300, width: 700, height: 54))
-    #expect(wider!.maxX == current.maxX)
+    #expect(wider!.maxX == start.maxX)
+}
+
+@Test func draggingTheTopEdgeHoldsTheBottomStillAndTheBottomEdgeHoldsTheTop() {
+    let start = CGRect(x: 200, y: 300, width: 460, height: 54)
+    let taller = FocusBarPlacement.resizedFrame(
+        start: start, handle: .vertical(.top), delta: drag(y: 120), visibleFrames: [builtIn]
+    )
+    #expect(taller == CGRect(x: 200, y: 300, width: 460, height: 174),
+            "dragging the top edge up grows the bar upwards, in AppKit's y-up coordinates")
+    #expect(taller!.minY == start.minY, "the bottom edge stays exactly where it was")
+
+    let downFromTheBottom = FocusBarPlacement.resizedFrame(
+        start: start, handle: .vertical(.bottom), delta: drag(y: -120), visibleFrames: [builtIn]
+    )
+    #expect(downFromTheBottom == CGRect(x: 200, y: 180, width: 460, height: 174))
+    #expect(downFromTheBottom!.maxY == start.maxY, "the top edge stays exactly where it was")
+
+    let squashed = FocusBarPlacement.resizedFrame(
+        start: start, handle: .vertical(.top), delta: drag(y: -400), visibleFrames: [builtIn]
+    )
+    #expect(squashed == CGRect(x: 200, y: 300, width: 460, height: FocusBarPlacement.minimumHeight),
+            "a bar never shrinks past the height its controls need")
+}
+
+@Test func everyCornerMovesItsOwnTwoEdgesAndLeavesTheOppositeOnesAlone() {
+    let start = CGRect(x: 400, y: 300, width: 460, height: 54)
+    let delta = drag(x: 100, y: 100)
+
+    let topRight = FocusBarPlacement.resizedFrame(
+        start: start, handle: .corner(.trailing, .top), delta: delta, visibleFrames: [builtIn]
+    )
+    #expect(topRight == CGRect(x: 400, y: 300, width: 560, height: 154))
+
+    let topLeft = FocusBarPlacement.resizedFrame(
+        start: start, handle: .corner(.leading, .top), delta: delta, visibleFrames: [builtIn]
+    )
+    #expect(topLeft == CGRect(x: 500, y: 300, width: 360, height: 154),
+            "the left edge follows the pointer while the right and bottom stay put")
+
+    let bottomRight = FocusBarPlacement.resizedFrame(
+        start: start, handle: .corner(.trailing, .bottom), delta: delta, visibleFrames: [builtIn]
+    )
+    #expect(bottomRight == CGRect(x: 400, y: 314, width: 560, height: FocusBarPlacement.minimumHeight),
+            "pushing the bottom up past the minimum stops at it, with the top edge still fixed")
+    #expect(bottomRight!.maxY == start.maxY)
+
+    let bottomLeft = FocusBarPlacement.resizedFrame(
+        start: start, handle: .corner(.leading, .bottom), delta: drag(x: -100, y: -100),
+        visibleFrames: [builtIn]
+    )
+    #expect(bottomLeft == CGRect(x: 300, y: 200, width: 560, height: 154))
+    #expect(bottomLeft!.maxX == start.maxX)
+    #expect(bottomLeft!.maxY == start.maxY)
 }
 
 @Test func aResizeCannotGrowPastTheDisplayTheBarIsOn() {
     let onExternal = CGRect(x: external.minX + 100, y: 1_000, width: 460, height: 54)
     let stretched = FocusBarPlacement.resizedFrame(
-        current: onExternal, edge: .trailing, deltaX: 9_000, visibleFrames: [builtIn, external]
+        start: onExternal, handle: .horizontal(.trailing), delta: drag(x: 9_000),
+        visibleFrames: [builtIn, external]
     )
     #expect(stretched == CGRect(x: onExternal.minX, y: 1_000, width: external.maxX - onExternal.minX, height: 54),
             "the dragged edge stops at the display boundary while the opposite edge stays fixed")
 
-    let small = CGRect(x: 0, y: 0, width: 300, height: 400)
-    let trimmed = FocusBarPlacement.resizedFrame(
-        current: CGRect(x: 0, y: 100, width: 300, height: 54), edge: .trailing, deltaX: 500, visibleFrames: [small]
+    let raised = FocusBarPlacement.resizedFrame(
+        start: onExternal, handle: .vertical(.top), delta: drag(y: 9_000),
+        visibleFrames: [builtIn, external]
     )
-    #expect(trimmed == CGRect(x: 0, y: 100, width: 300, height: 54),
-            "a display narrower than the minimum width still holds the bar")
+    #expect(raised == CGRect(x: onExternal.minX, y: 1_000, width: 460, height: external.maxY - onExternal.minY),
+            "the top edge stops at the top of the usable area with the bottom still fixed")
+
+    let cornered = FocusBarPlacement.resizedFrame(
+        start: onExternal, handle: .corner(.trailing, .top), delta: drag(x: 9_000, y: 9_000),
+        visibleFrames: [builtIn, external]
+    )
+    #expect(cornered == CGRect(
+        x: onExternal.minX,
+        y: 1_000,
+        width: external.maxX - onExternal.minX,
+        height: external.maxY - onExternal.minY
+    ), "a corner takes both limits from the same starting frame")
+
+    let small = CGRect(x: 0, y: 0, width: 300, height: 30)
+    let trimmed = FocusBarPlacement.resizedFrame(
+        start: CGRect(x: 0, y: 0, width: 300, height: 30), handle: .corner(.trailing, .top),
+        delta: drag(x: 500, y: 500), visibleFrames: [small]
+    )
+    #expect(trimmed == CGRect(x: 0, y: 0, width: 300, height: 30),
+            "a display smaller than the minimum bar still holds the whole bar")
+}
+
+@Test func aStartFrameOffItsDisplayIsPulledBackBeforeItIsResized() {
+    let offNegatively = CGRect(x: external.minX - 500, y: external.minY - 500, width: 460, height: 54)
+    let resized = FocusBarPlacement.resizedFrame(
+        start: offNegatively, handle: .vertical(.top), delta: drag(y: 60), visibleFrames: [external]
+    )
+    #expect(resized == CGRect(x: external.minX, y: external.minY, width: 460, height: 114),
+            "the drag grows from the corner the frame is pulled back to, not from where it was")
+    #expect(FocusBarPlacement.resizedFrame(
+        start: offNegatively, handle: .vertical(.top), delta: drag(y: 60), visibleFrames: []
+    ) == nil)
+}
+
+@Test func theHandleUnderAPressPrefersCornersAndLeavesTheControlBandAlone() {
+    let bounds = CGRect(x: 0, y: 0, width: 460, height: FocusBarPlacement.minimumHeight)
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 230, y: 20), in: bounds) == nil,
+            "the middle of the capsule moves the bar")
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 2, y: 20), in: bounds) == .horizontal(.leading))
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 458, y: 20), in: bounds) == .horizontal(.trailing))
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 230, y: 1), in: bounds) == .vertical(.bottom))
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 230, y: 39), in: bounds) == .vertical(.top))
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 1, y: 1), in: bounds) == .corner(.leading, .bottom),
+            "a point inside both insets is a corner rather than either edge on its own")
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: 459, y: 39), in: bounds) == .corner(.trailing, .top))
+    #expect(FocusBarPlacement.handle(at: CGPoint(x: -1, y: 20), in: bounds) == nil)
+
+    let controlCentre = bounds.midY
+    for x in [bounds.maxX - 28, bounds.maxX - 70, bounds.maxX - 112, bounds.midX] {
+        #expect(FocusBarPlacement.handle(at: CGPoint(x: x, y: controlCentre), in: bounds) == nil,
+                "no edge band reaches the centre of a control at the minimum height")
+    }
 }
 
 @Test func fitFillsTheUsableWidthOfTheDisplayHoldingTheBar() {
@@ -115,6 +224,10 @@ private let external = CGRect(x: -1_920, y: 900, width: 1_920, height: 1_080)
     #expect(FocusBarPlacement.fitFrame(current: onExternal, visibleFrames: [builtIn, external]) ==
         CGRect(x: external.minX, y: 1_000, width: external.width, height: 54),
         "fit keeps the row the bar was on and takes the whole usable width")
+
+    let tall = CGRect(x: external.minX + 600, y: 1_000, width: 460, height: 160)
+    #expect(FocusBarPlacement.fitFrame(current: tall, visibleFrames: [builtIn, external])?.height == 160,
+            "fit changes the width only; the height the person chose is kept")
 
     let onGoneDisplay = CGRect(x: -5_000, y: 4_000, width: 460, height: 54)
     #expect(FocusBarPlacement.fitFrame(current: onGoneDisplay, visibleFrames: [builtIn]) ==
@@ -126,4 +239,56 @@ private let external = CGRect(x: -1_920, y: 900, width: 1_920, height: 1_080)
         ),
         "a bar on a display that is gone fits the primary one, above its Dock")
     #expect(FocusBarPlacement.fitFrame(current: onExternal, visibleFrames: []) == nil)
+}
+
+@Test func resettingTheHeightKeepsTheWidthAndTheBottomLeftCorner() {
+    let tall = CGRect(x: 300, y: 200, width: 700, height: 300)
+    #expect(FocusBarPlacement.frame(
+        preferredOrigin: tall.origin,
+        size: CGSize(width: tall.width, height: FocusBarPlacement.defaultHeight),
+        visibleFrames: [builtIn]
+    ) == CGRect(x: 300, y: 200, width: 700, height: 54))
+
+    let high = CGRect(x: 300, y: builtIn.maxY - 20, width: 700, height: 300)
+    #expect(FocusBarPlacement.frame(
+        preferredOrigin: high.origin,
+        size: CGSize(width: high.width, height: FocusBarPlacement.defaultHeight),
+        visibleFrames: [builtIn]
+    ) == CGRect(x: 300, y: builtIn.maxY - 54, width: 700, height: 54))
+}
+
+@Test func resizingOneAxisDoesNotPersistDisplayClippingOnTheOtherAxis() {
+    #expect(FocusBarPlacement.persistedSize(
+        after: .vertical(.top), started: CGSize(width: 460, height: 54), rendered: CGSize(width: 300, height: 140),
+        requested: CGSize(width: 1200, height: 90)
+    ) == CGSize(width: 1200, height: 140))
+    #expect(FocusBarPlacement.persistedSize(
+        after: .horizontal(.trailing), started: CGSize(width: 460, height: 54), rendered: CGSize(width: 700, height: 30),
+        requested: CGSize(width: 460, height: 200)
+    ) == CGSize(width: 700, height: 200))
+    #expect(FocusBarPlacement.persistedSize(
+        after: .vertical(.bottom), started: CGSize(width: 460, height: 54), rendered: CGSize(width: 800, height: 140),
+        requested: CGSize(width: 1200, height: 90)
+    ) == CGSize(width: 1200, height: 140))
+}
+
+@Test func cornerResizePersistsEachAxisOnlyWhenTheDisplayCanFitItsMinimum() {
+    let requested = CGSize(width: 1200, height: 90)
+    #expect(FocusBarPlacement.persistedSize(
+        after: .corner(.leading, .bottom), started: CGSize(width: 460, height: 54), rendered: CGSize(width: 300, height: 30), requested: requested
+    ) == requested)
+    #expect(FocusBarPlacement.persistedSize(
+        after: .corner(.trailing, .top), started: CGSize(width: 460, height: 54), rendered: CGSize(width: 700, height: 120), requested: requested
+    ) == CGSize(width: 700, height: 120))
+}
+
+@Test func cornerDragPreservesClippedAxisWhenOnlyTheOtherAxisChanges() {
+    #expect(FocusBarPlacement.persistedSize(
+        after: .corner(.trailing, .top), started: CGSize(width: 800, height: 90),
+        rendered: CGSize(width: 800, height: 140), requested: CGSize(width: 1200, height: 90)
+    ) == CGSize(width: 1200, height: 140))
+    #expect(FocusBarPlacement.persistedSize(
+        after: .corner(.leading, .bottom), started: CGSize(width: 460, height: 80),
+        rendered: CGSize(width: 700, height: 80), requested: CGSize(width: 460, height: 200)
+    ) == CGSize(width: 700, height: 200))
 }

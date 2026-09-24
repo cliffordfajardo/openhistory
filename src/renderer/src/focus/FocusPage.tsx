@@ -634,7 +634,7 @@ function SessionDisplayCard({
       </div>
       <div className="focus-style-options" role="radiogroup" aria-label="Where to show the running session">
         {([
-          ["floating", "Floating bar", "A small bar above the Dock with the goal, countdown, pause and complete. Drag it anywhere; its place is remembered."],
+          ["floating", "Floating bar", "A small bar above the Dock with the goal, countdown, pause and complete. Drag it anywhere, or drag an edge or corner to resize it; its place and size are remembered."],
           ["menuBar", "Menu bar only", "No floating bar. The countdown and controls stay in the menu-bar icon."]
         ] as const).map(([option, label, detail]) => (
           <button
@@ -681,7 +681,7 @@ function SessionDisplayCard({
         </div>
       ) : null}
       <p className="focus-quiet">
-        Keyboard: use <strong>Focus the bar</strong> above, or <strong>Focus Floating Bar</strong> in the menu-bar icon, to move focus into the bar. Then Tab between its controls, press Space or Return to use one, and press Escape to hand the keyboard back. Hovering or focusing the bar reveals pause, complete and its overflow menu; drag the bar itself to move it.
+        Keyboard: use <strong>Focus the bar</strong> above, or <strong>Focus Floating Bar</strong> in the menu-bar icon, to move focus into the bar. Then Tab between its controls, press Space or Return to use one, and press Escape to hand the keyboard back. Hovering or focusing the bar reveals pause, complete and its overflow menu; drag the bar itself to move it, any edge or corner to resize it, and use <strong>Reset Width</strong> or <strong>Reset Height</strong> in the overflow menu to put either back.
       </p>
       {error ? <InlineError>{error}</InlineError> : null}
     </div>

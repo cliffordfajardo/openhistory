@@ -14,6 +14,8 @@ struct FocusBarSnapshot: Decodable {
     let position: Position?
     /// Saved width; absent from bridges written before the bar could be resized.
     let width: Double?
+    /// Saved height; absent from bridges written before the bar could be made taller or shorter.
+    let height: Double?
     /// The chosen `#rrggbb` fill color; absent from apps written before it could be chosen.
     let progressColor: String?
 
@@ -35,6 +37,13 @@ struct FocusBarSnapshot: Decodable {
         return min(max(requested, FocusBarPlacement.minimumWidth), FocusBarPlacement.maximumWidth)
     }
 
+    var barHeight: CGFloat {
+        let requested = CGFloat(height ?? Double(FocusBarPlacement.defaultHeight))
+        return min(max(requested, FocusBarPlacement.minimumHeight), FocusBarPlacement.maximumHeight)
+    }
+
+    var barSize: NSSize { NSSize(width: barWidth, height: barHeight) }
+
     /// The same safe-integer millisecond bound the timer bar uses: a session that was extended
     /// past a day is still a session the app can legally hold, so the bar draws it rather than
     /// refusing it.
@@ -52,6 +61,10 @@ struct FocusBarSnapshot: Decodable {
             (width.map {
                 $0.isFinite && $0 >= Double(FocusBarPlacement.minimumWidth) &&
                     $0 <= Double(FocusBarPlacement.maximumWidth)
+            } ?? true) &&
+            (height.map {
+                $0.isFinite && $0 >= Double(FocusBarPlacement.minimumHeight) &&
+                    $0 <= Double(FocusBarPlacement.maximumHeight)
             } ?? true)
     }
 }
@@ -64,17 +77,19 @@ enum FocusBarResult: Int32 {
 }
 
 private enum FocusBarStyle {
-    static let height: CGFloat = 54
-    static let defaultSize = NSSize(width: FocusBarPlacement.defaultWidth, height: height)
+    static let defaultSize = NSSize(
+        width: FocusBarPlacement.defaultWidth,
+        height: FocusBarPlacement.defaultHeight
+    )
     static let cornerRadius: CGFloat = 14
     static let padding: CGFloat = 14
     static let controlSize: CGFloat = 28
     static let controlGap: CGFloat = 4
     static let countdownWidth: CGFloat = 66
     static let revealDuration: TimeInterval = 0.12
-    /// How far in from a vertical edge a press starts a resize instead of a move.
-    static let resizeEdge: CGFloat = 8
-    static let gripSize = NSSize(width: 2, height: 16)
+    static let gripLength: CGFloat = 16
+    static let gripThickness: CGFloat = 2
+    static let gripInset: CGFloat = 4
     /// How far the fill may sit from the anchored clock before it is corrected, in points.
     static let progressDrift: CGFloat = 4
     static let running = CGColor(srgbRed: 0.36, green: 0.62, blue: 0.45, alpha: 1)
@@ -292,9 +307,11 @@ final class FocusBarContentView: NSView {
     private let fill = CALayer()
     private let leadingGrip = FocusBarDecoration()
     private let trailingGrip = FocusBarDecoration()
+    private let bottomGrip = FocusBarDecoration()
+    private let topGrip = FocusBarDecoration()
     private var fillColor = FocusProgressColor.fallback
-    private var hoveredEdge: FocusBarPlacement.HorizontalEdge?
-    private var activeResize: (edge: FocusBarPlacement.HorizontalEdge, startX: CGFloat)?
+    private var hoveredHandle: FocusBarPlacement.ResizeHandle?
+    private var activeResize: (handle: FocusBarPlacement.ResizeHandle, startPoint: NSPoint)?
     private let goalLabel = FocusBarLabel(labelWithString: "")
     private let countdownLabel = FocusBarLabel(labelWithString: "")
     let primaryButton: FocusBarButton
@@ -354,9 +371,9 @@ final class FocusBarContentView: NSView {
         progress.layer?.addSublayer(fill)
         addSubview(progress)
 
-        for grip in [leadingGrip, trailingGrip] {
+        for grip in [leadingGrip, trailingGrip, bottomGrip, topGrip] {
             grip.wantsLayer = true
-            grip.layer?.cornerRadius = FocusBarStyle.gripSize.width / 2
+            grip.layer?.cornerRadius = FocusBarStyle.gripThickness / 2
             grip.layer?.backgroundColor = CGColor(gray: 1, alpha: 0.45)
             grip.isHidden = true
             grip.setAccessibilityElement(false)
@@ -389,14 +406,12 @@ final class FocusBarContentView: NSView {
     required init?(coder: NSCoder) { nil }
 
     /**
-     A press near a vertical edge resizes; anywhere else drags the whole bar. The panel is
+     A press near an edge or a corner resizes; anywhere else drags the whole bar. The panel is
      borderless, so the edges are handled here rather than by AppKit's own resize corners.
-     `performDrag(with:)` runs the move to its end, so the drag handlers below only ever see a
-     resize.
      */
     override func mouseDown(with event: NSEvent) {
-        if let window, let edge = resizeEdge(at: convert(event.locationInWindow, from: nil)) {
-            activeResize = (edge: edge, startX: window.convertPoint(toScreen: event.locationInWindow).x)
+        if let window, let handle = resizeHandle(at: convert(event.locationInWindow, from: nil)) {
+            activeResize = (handle: handle, startPoint: window.convertPoint(toScreen: event.locationInWindow))
             MainActor.assumeIsolated { FocusBarController.shared.beginResize() }
             return
         }
@@ -408,14 +423,26 @@ final class FocusBarContentView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         guard let resize = activeResize, let window else { return }
-        let deltaX = window.convertPoint(toScreen: event.locationInWindow).x - resize.startX
-        MainActor.assumeIsolated { FocusBarController.shared.resize(edge: resize.edge, deltaX: deltaX) }
+        let pointer = window.convertPoint(toScreen: event.locationInWindow)
+        let delta = NSSize(
+            width: pointer.x - resize.startPoint.x,
+            height: pointer.y - resize.startPoint.y
+        )
+        MainActor.assumeIsolated {
+            FocusBarController.shared.resize(handle: resize.handle, delta: delta)
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard let resize = activeResize else { return }
+        activeResize = nil
+        MainActor.assumeIsolated { FocusBarController.shared.finishResize(handle: resize.handle) }
+    }
+
+    func cancelResize() {
         guard activeResize != nil else { return }
         activeResize = nil
-        MainActor.assumeIsolated { FocusBarController.shared.finishResize() }
+        updateHover(at: nil)
     }
 
     override func updateTrackingAreas() {
@@ -441,11 +468,11 @@ final class FocusBarContentView: NSView {
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        if hoveredEdge == nil {
+        guard let handle = hoveredHandle else {
             super.cursorUpdate(with: event)
             return
         }
-        NSCursor.resizeLeftRight.set()
+        FocusBarContentView.resizeCursor(for: handle).set()
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -454,24 +481,48 @@ final class FocusBarContentView: NSView {
         setRevealed(false)
     }
 
-    private func resizeEdge(at point: NSPoint) -> FocusBarPlacement.HorizontalEdge? {
-        guard bounds.contains(point) else { return nil }
-        if point.x <= bounds.minX + FocusBarStyle.resizeEdge { return .leading }
-        if point.x >= bounds.maxX - FocusBarStyle.resizeEdge { return .trailing }
-        return nil
+    private func resizeHandle(at point: NSPoint) -> FocusBarPlacement.ResizeHandle? {
+        FocusBarPlacement.handle(at: point, in: bounds)
+    }
+
+    /**
+     The cursor that shows which edges a press would move. `frameResize(position:directions:)` is
+     the public API for this and is only there from macOS 15, so older systems get the public
+     axis cursors instead; `crosshair` is the closest public stand-in for a corner.
+     */
+    private static func resizeCursor(for handle: FocusBarPlacement.ResizeHandle) -> NSCursor {
+        if #available(macOS 15.0, *) {
+            switch handle {
+            case .horizontal(.leading): return .frameResize(position: .left, directions: .all)
+            case .horizontal(.trailing): return .frameResize(position: .right, directions: .all)
+            case .vertical(.bottom): return .frameResize(position: .bottom, directions: .all)
+            case .vertical(.top): return .frameResize(position: .top, directions: .all)
+            case .corner(.leading, .bottom): return .frameResize(position: .bottomLeft, directions: .all)
+            case .corner(.leading, .top): return .frameResize(position: .topLeft, directions: .all)
+            case .corner(.trailing, .bottom): return .frameResize(position: .bottomRight, directions: .all)
+            case .corner(.trailing, .top): return .frameResize(position: .topRight, directions: .all)
+            }
+        }
+        switch handle {
+        case .horizontal: return .resizeLeftRight
+        case .vertical: return .resizeUpDown
+        case .corner: return .crosshair
+        }
     }
 
     private func updateHover(at point: NSPoint?) {
-        let edge = activeResize?.edge ?? point.flatMap { resizeEdge(at: $0) }
-        if edge != nil {
-            NSCursor.resizeLeftRight.set()
-        } else if hoveredEdge != nil {
+        let handle = activeResize?.handle ?? point.flatMap { resizeHandle(at: $0) }
+        if let handle {
+            FocusBarContentView.resizeCursor(for: handle).set()
+        } else if hoveredHandle != nil {
             NSCursor.arrow.set()
         }
-        guard edge != hoveredEdge else { return }
-        hoveredEdge = edge
-        leadingGrip.isHidden = edge != .leading
-        trailingGrip.isHidden = edge != .trailing
+        guard handle != hoveredHandle else { return }
+        hoveredHandle = handle
+        leadingGrip.isHidden = handle?.horizontal != .leading
+        trailingGrip.isHidden = handle?.horizontal != .trailing
+        bottomGrip.isHidden = handle?.vertical != .bottom
+        topGrip.isHidden = handle?.vertical != .top
     }
 
     func setRevealed(_ visible: Bool) {
@@ -603,14 +654,25 @@ final class FocusBarContentView: NSView {
         // The fill itself is never laid out here: only `setProgress` moves it, so a layout pass
         // during a resize or a reveal cannot restart the running animation.
         progress.frame = bounds
-        let grip = FocusBarStyle.gripSize
-        let gripY = bounds.midY - grip.height / 2
-        leadingGrip.frame = NSRect(x: bounds.minX + 4, y: gripY, width: grip.width, height: grip.height)
+        let thickness = FocusBarStyle.gripThickness
+        let inset = FocusBarStyle.gripInset
+        let sideLength = min(FocusBarStyle.gripLength, max(thickness, bounds.height - inset * 2))
+        let endLength = min(FocusBarStyle.gripLength, max(thickness, bounds.width - inset * 2))
+        let sideY = bounds.midY - sideLength / 2
+        let endX = bounds.midX - endLength / 2
+        leadingGrip.frame = NSRect(x: bounds.minX + inset, y: sideY, width: thickness, height: sideLength)
         trailingGrip.frame = NSRect(
-            x: bounds.maxX - 4 - grip.width,
-            y: gripY,
-            width: grip.width,
-            height: grip.height
+            x: bounds.maxX - inset - thickness,
+            y: sideY,
+            width: thickness,
+            height: sideLength
+        )
+        bottomGrip.frame = NSRect(x: endX, y: bounds.minY + inset, width: endLength, height: thickness)
+        topGrip.frame = NSRect(
+            x: endX,
+            y: bounds.maxY - inset - thickness,
+            width: endLength,
+            height: thickness
         )
         let padding = FocusBarStyle.padding
         let control = FocusBarStyle.controlSize
@@ -661,7 +723,9 @@ final class FocusBarController: NSObject {
     /// Shows or refreshes the bar without activating the app or making the panel key.
     func update(_ snapshot: FocusBarSnapshot) -> FocusBarResult {
         guard snapshot.isValid else { return .invalidRequest }
-        guard let frame = placement(for: snapshot) else { return .noDisplay }
+        if self.snapshot?.sessionId != snapshot.sessionId { cancelResize() }
+        let live: NSRect? = resizeStartFrame == .zero ? placement(for: snapshot) : barFrame
+        guard let frame = live else { return .noDisplay }
         installObserversIfNeeded()
         let (panel, content) = ensurePanel()
         let clockChanged = self.snapshot?.clockFingerprint != snapshot.clockFingerprint
@@ -687,7 +751,7 @@ final class FocusBarController: NSObject {
         stopPaintTimer()
         recentBarUntil = Date().addingTimeInterval(1)
         snapshot = nil
-        resizeStartFrame = .zero
+        cancelResize()
         guard let panel else { return }
         contentView?.stopProgressAnimation()
         contentView?.setRevealed(false)
@@ -746,22 +810,29 @@ final class FocusBarController: NSObject {
         resizeStartFrame = panel.frame
     }
 
-    fileprivate func resize(edge: FocusBarPlacement.HorizontalEdge, deltaX: CGFloat) {
+    fileprivate func resize(handle: FocusBarPlacement.ResizeHandle, delta: NSSize) {
         guard resizeStartFrame != .zero else { return }
         guard let frame = FocusBarPlacement.resizedFrame(
-            current: resizeStartFrame,
-            edge: edge,
-            deltaX: deltaX,
+            start: resizeStartFrame,
+            handle: handle,
+            delta: delta,
             visibleFrames: NSScreen.screens.map(\.visibleFrame)
         ) else { return }
         applyFrame(frame)
     }
 
-    fileprivate func finishResize() {
+    fileprivate func finishResize(handle: FocusBarPlacement.ResizeHandle) {
         let started = resizeStartFrame
         resizeStartFrame = .zero
-        guard started != .zero, let panel, panel.frame != started else { return }
-        reportGeometry()
+        guard started != .zero, let panel, let snapshot, panel.frame != started else { return }
+        reportGeometry(size: FocusBarPlacement.persistedSize(
+            after: handle, started: started.size, rendered: barFrame.size, requested: snapshot.barSize
+        ))
+    }
+
+    private func cancelResize() {
+        resizeStartFrame = .zero
+        contentView?.cancelResize()
     }
 
     @discardableResult
@@ -774,14 +845,15 @@ final class FocusBarController: NSObject {
         return true
     }
 
-    private func reportGeometry() {
+    private func reportGeometry(size: NSSize) {
         guard let snapshot else { return }
         send([
             "action": "resized",
             "sessionId": snapshot.sessionId,
             "x": barFrame.minX,
             "y": barFrame.minY,
-            "width": barFrame.width
+            "width": size.width,
+            "height": size.height
         ])
     }
 
@@ -803,6 +875,7 @@ final class FocusBarController: NSObject {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Fit Display Width", action: #selector(fitDisplayWidth), keyEquivalent: "")
         menu.addItem(withTitle: "Reset Width", action: #selector(resetWidth), keyEquivalent: "")
+        menu.addItem(withTitle: "Reset Height", action: #selector(resetHeight), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Move to Menu Bar", action: #selector(moveToMenuBar), keyEquivalent: "")
         for item in menu.items { item.target = self }
@@ -819,16 +892,20 @@ final class FocusBarController: NSObject {
     @objc private func moveToMenuBar() { report("move_to_menu_bar") }
 
     @objc private func fitDisplayWidth() {
-        guard let panel else { return }
+        guard let panel, let snapshot else { return }
         guard let frame = FocusBarPlacement.fitFrame(
             current: panel.frame,
             visibleFrames: NSScreen.screens.map(\.visibleFrame)
         ) else { return }
-        if applyFrame(frame) { reportGeometry() }
+        applyFrame(frame)
+        reportGeometry(size: NSSize(
+            width: frame.width >= FocusBarPlacement.minimumWidth ? frame.width : snapshot.barWidth,
+            height: snapshot.barHeight
+        ))
     }
 
     @objc private func resetWidth() {
-        guard let panel else { return }
+        guard let panel, let snapshot else { return }
         let current = panel.frame
         let size = NSSize(width: FocusBarPlacement.defaultWidth, height: current.height)
         guard let frame = FocusBarPlacement.frame(
@@ -836,7 +913,20 @@ final class FocusBarController: NSObject {
             size: size,
             visibleFrames: NSScreen.screens.map(\.visibleFrame)
         ) else { return }
-        if applyFrame(frame) { reportGeometry() }
+        applyFrame(frame)
+        reportGeometry(size: NSSize(width: FocusBarPlacement.defaultWidth, height: snapshot.barHeight))
+    }
+
+    @objc private func resetHeight() {
+        guard let panel, let snapshot else { return }
+        let current = panel.frame
+        guard let frame = FocusBarPlacement.frame(
+            preferredOrigin: current.origin,
+            size: NSSize(width: current.width, height: FocusBarPlacement.defaultHeight),
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
+        ) else { return }
+        applyFrame(frame)
+        reportGeometry(size: NSSize(width: snapshot.barWidth, height: FocusBarPlacement.defaultHeight))
     }
 
     private func togglePause() {
@@ -863,7 +953,7 @@ final class FocusBarController: NSObject {
     private func placement(for snapshot: FocusBarSnapshot) -> NSRect? {
         let visibleFrames = NSScreen.screens.map(\.visibleFrame)
         let preferred = snapshot.position.map { NSPoint(x: $0.x, y: $0.y) }
-        let size = NSSize(width: snapshot.barWidth, height: FocusBarStyle.height)
+        let size = snapshot.barSize
         if panel?.isVisible == true, barFrame != .zero,
            let kept = FocusBarPlacement.frame(
                preferredOrigin: barFrame.origin,
@@ -990,13 +1080,14 @@ final class FocusBarController: NSObject {
     }
 
     /**
-     A display change only trims the bar onto what is left; the saved width is not rewritten, so a
-     bar can use its saved width again on a display large enough to hold it.
+     A display change only trims the bar onto what is left; the saved size is not rewritten, so a
+     bar can use its saved width and height again on a display large enough to hold them. A drag
+     that was in progress is dropped rather than continued against displays that have moved.
      */
     @objc private func screenParametersChanged() {
         guard let panel, panel.isVisible else { return }
-        let size = snapshot.map { NSSize(width: $0.barWidth, height: FocusBarStyle.height) }
-            ?? barFrame.size
+        cancelResize()
+        let size = snapshot?.barSize ?? barFrame.size
         guard let frame = FocusBarPlacement.frame(
             preferredOrigin: barFrame.origin,
             size: size,

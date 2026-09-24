@@ -18,6 +18,7 @@ import {
   type FocusBarSnapshot
 } from "./focus-bar";
 import {
+  FocusBarHeightSchema,
   FocusBarPositionSchema,
   FocusBarPresentationSchema,
   FocusBarWidthSchema,
@@ -620,12 +621,17 @@ export class FocusController extends EventEmitter {
         break;
       }
       case "resized": {
-        const { x, y, width } = parsed.data;
-        if (x === undefined || y === undefined || width === undefined) return;
+        const { x, y, width, height } = parsed.data;
+        if (x === undefined || y === undefined || width === undefined || height === undefined) return;
         const position = FocusBarPositionSchema.safeParse({ x, y });
         const parsedWidth = FocusBarWidthSchema.safeParse(width);
-        if (!position.success || !parsedWidth.success) return;
-        this.options.store.saveBarGeometry({ position: position.data, width: parsedWidth.data });
+        const parsedHeight = FocusBarHeightSchema.safeParse(height);
+        if (!position.success || !parsedWidth.success || !parsedHeight.success) return;
+        this.options.store.saveBarGeometry({
+          position: position.data,
+          width: parsedWidth.data,
+          height: parsedHeight.data
+        });
         this.publish();
         break;
       }
@@ -644,7 +650,7 @@ export class FocusController extends EventEmitter {
     const snapshot = focusBarSnapshot(
       session,
       this.now(),
-      { position: document.barPosition, width: document.barWidth },
+      { position: document.barPosition, width: document.barWidth, height: document.barHeight },
       document.preferences.progressColor
     );
     const serialized = JSON.stringify(snapshot);

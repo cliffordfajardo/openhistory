@@ -271,6 +271,7 @@ test("exposes the floating bar only when the bridge has all of its calls", async
     snoozed: false,
     position: null,
     width: 460,
+    height: 54,
     progressColor: "#5c9e73"
   }), "no_display");
   assert.equal((JSON.parse(snapshots[0]!) as { sessionId: string }).sessionId, "session-1");

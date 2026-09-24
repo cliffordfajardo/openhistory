@@ -1,4 +1,5 @@
 import {
+  FOCUS_BAR_HEIGHT,
   FOCUS_BAR_WIDTH,
   FOCUS_LIMITS,
   FOCUS_PROGRESS_COLOR_DEFAULT,
@@ -54,6 +55,7 @@ function defaultDocument(): FocusDocument {
     preferences: structuredClone(DEFAULT_FOCUS_PREFERENCES),
     barPosition: null,
     barWidth: FOCUS_BAR_WIDTH.default,
+    barHeight: FOCUS_BAR_HEIGHT.default,
     session: null
   };
 }
@@ -146,15 +148,18 @@ export class FocusStore {
   }
 
   /**
-   * Where the person last left the floating bar and how wide they left it; cleared with the rest
-   * of the local data. A resize moves and widens the bar at once, so both are written together.
+   * Where the person last left the floating bar and how big they left it; cleared with the rest of
+   * the local data. A resize moves and resizes the bar at once, so all three are written together.
    * An omitted field keeps its saved value; an explicit `null` position forgets the saved corner.
    */
-  saveBarGeometry(changes: { position?: FocusBarPosition | null; width?: number }): FocusDocument {
+  saveBarGeometry(
+    changes: { position?: FocusBarPosition | null; width?: number; height?: number }
+  ): FocusDocument {
     return this.write({
       ...this.document,
       barPosition: changes.position === undefined ? this.document.barPosition : changes.position,
-      barWidth: changes.width ?? this.document.barWidth
+      barWidth: changes.width ?? this.document.barWidth,
+      barHeight: changes.height ?? this.document.barHeight
     });
   }
 

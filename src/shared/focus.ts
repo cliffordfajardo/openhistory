@@ -89,8 +89,8 @@ export interface FocusBarPosition {
 }
 
 /**
- * How wide the floating bar is, in points. The height is fixed. The maximum is generous rather
- * than a real display width: a bar wider than its display is trimmed to fit when it is placed.
+ * How wide the floating bar is, in points. The maximum is generous rather than a real display
+ * width: a bar wider than its display is trimmed to fit when it is placed.
  */
 export const FOCUS_BAR_WIDTH = {
   default: 460,
@@ -98,10 +98,21 @@ export const FOCUS_BAR_WIDTH = {
   maximum: 20_000
 } as const;
 
-/** Where the floating bar sits and how wide it is, as saved between sessions. */
+/**
+ * How tall the floating bar is, in points. The minimum still holds the 28-point controls with a
+ * margin above and below; the maximum is generous in the same way the width's is.
+ */
+export const FOCUS_BAR_HEIGHT = {
+  default: 54,
+  minimum: 40,
+  maximum: 20_000
+} as const;
+
+/** Where the floating bar sits and how big it is, as saved between sessions. */
 export interface FocusBarGeometry {
   position: FocusBarPosition | null;
   width: number;
+  height: number;
 }
 
 export interface FocusPreferences {

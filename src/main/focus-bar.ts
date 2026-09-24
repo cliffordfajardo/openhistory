@@ -10,9 +10,9 @@ import { z } from "zod";
 
 /**
  * What the floating bar sends back. `moved` reports where a drag finished and `resized` where an
- * edge drag or a width menu item left the whole capsule; the others are the session controls.
- * Every line carries the session it was drawn for, so a click that arrives after the session
- * changed is discarded instead of applied to the new one.
+ * edge or corner drag, or a size menu item, left the whole capsule; the others are the session
+ * controls. Every line carries the session it was drawn for, so a click that arrives after the
+ * session changed is discarded instead of applied to the new one.
  */
 export const FOCUS_BAR_ACTIONS = [
   "pause",
@@ -30,7 +30,8 @@ export const FocusBarActionSchema = z.object({
   sessionId: z.string().min(1).max(100),
   x: z.number().finite().min(-200_000).max(200_000).optional(),
   y: z.number().finite().min(-200_000).max(200_000).optional(),
-  width: z.number().finite().min(0).max(200_000).optional()
+  width: z.number().finite().min(0).max(200_000).optional(),
+  height: z.number().finite().min(0).max(200_000).optional()
 }).strict();
 
 /**
@@ -52,6 +53,8 @@ export interface FocusBarSnapshot {
   position: FocusBarPosition | null;
   /** Saved width in points; the native side trims it to the display it lands on. */
   width: number;
+  /** Saved height in points; trimmed to the display it lands on in the same way. */
+  height: number;
   /** The shared progress color as `#rrggbb`; the bar draws its fill from it at its own opacity. */
   progressColor: string;
 }
@@ -77,6 +80,7 @@ export function focusBarSnapshot(
     snoozed: snoozedUntil > now,
     position: geometry.position,
     width: geometry.width,
+    height: geometry.height,
     progressColor
   };
 }

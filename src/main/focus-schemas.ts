@@ -1,4 +1,5 @@
 import {
+  FOCUS_BAR_HEIGHT,
   FOCUS_BAR_PRESENTATIONS,
   FOCUS_BAR_WIDTH,
   FOCUS_EXPERIENCES,
@@ -96,6 +97,11 @@ export const FocusBarWidthSchema = z.number().finite()
   .max(FOCUS_BAR_WIDTH.maximum)
   .transform((value) => Math.round(value));
 
+export const FocusBarHeightSchema = z.number().finite()
+  .min(FOCUS_BAR_HEIGHT.minimum)
+  .max(FOCUS_BAR_HEIGHT.maximum)
+  .transform((value) => Math.round(value));
+
 /** Renderer or bar edit of the running session. Every field is optional and applied on its own. */
 export const FocusSessionEditSchema: z.ZodType<FocusSessionEdit> = z.object({
   goalId: GoalIdSchema.optional(),
@@ -183,6 +189,8 @@ export const FocusDocumentSchema = z.object({
   preferences: FocusPreferencesSchema,
   barPosition: FocusBarPositionSchema.nullable().default(null),
   barWidth: FocusBarWidthSchema.default(FOCUS_BAR_WIDTH.default),
+  /** Files written before the bar could be made shorter or taller keep the 54-point capsule. */
+  barHeight: FocusBarHeightSchema.default(FOCUS_BAR_HEIGHT.default),
   /**
    * A malformed session is dropped here instead of failing the whole file: goals, sites and
    * preferences are worth keeping even when the session that was running is not understood.

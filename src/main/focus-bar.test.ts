@@ -1,4 +1,5 @@
 import {
+  FOCUS_BAR_HEIGHT,
   FOCUS_BAR_WIDTH,
   FOCUS_PROGRESS_COLOR_DEFAULT,
   type ActiveFocusSession
@@ -31,7 +32,11 @@ function session(overrides: Partial<ActiveFocusSession> = {}): ActiveFocusSessio
   };
 }
 
-const COMPACT = { position: null, width: FOCUS_BAR_WIDTH.default };
+const COMPACT = {
+  position: null,
+  width: FOCUS_BAR_WIDTH.default,
+  height: FOCUS_BAR_HEIGHT.default
+};
 const GREEN = FOCUS_PROGRESS_COLOR_DEFAULT;
 
 test("a running session sends a deadline the bar can count down from on its own", () => {
@@ -46,6 +51,7 @@ test("a running session sends a deadline the bar can count down from on its own"
     snoozed: false,
     position: null,
     width: 460,
+    height: 54,
     progressColor: GREEN
   });
   assert.deepEqual(
@@ -59,13 +65,14 @@ test("a paused session sends its frozen countdown instead of a deadline", () => 
   const snapshot = focusBarSnapshot(
     session({ endsAt: null, pausedRemainingMs: 8 * 60_000 + 400 }),
     T0 + 60 * 60_000,
-    { position: { x: 12, y: 30 }, width: 1_200 },
+    { position: { x: 12, y: 30 }, width: 1_200, height: 96 },
     "#b86b5c"
   );
   assert.equal(snapshot.endsAtEpochSeconds, null);
   assert.equal(snapshot.pausedRemainingSeconds, 480.4);
   assert.deepEqual(snapshot.position, { x: 12, y: 30 });
   assert.equal(snapshot.width, 1_200, "the saved width travels with the position");
+  assert.equal(snapshot.height, 96, "and so does the saved height");
   assert.equal(snapshot.progressColor, "#b86b5c", "a paused bar keeps the chosen fill color");
 });
 
@@ -106,7 +113,9 @@ test("bar actions are accepted only in their exact shape", () => {
     true
   );
   assert.equal(
-    FocusBarActionSchema.safeParse({ action: "resized", sessionId: "session-a", x: 0, y: 40, width: 980 }).success,
+    FocusBarActionSchema.safeParse({
+      action: "resized", sessionId: "session-a", x: 0, y: 40, width: 980, height: 96
+    }).success,
     true
   );
   for (const value of [
@@ -123,7 +132,10 @@ test("bar actions are accepted only in their exact shape", () => {
     { action: "moved", sessionId: "session-a", x: "12", y: 0 },
     { action: "resized", sessionId: "session-a", x: 0, y: 0, width: Number.NaN },
     { action: "resized", sessionId: "session-a", x: 0, y: 0, width: "980" },
-    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: 400_000 }
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: 400_000 },
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: 980, height: Number.NaN },
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: 980, height: "96" },
+    { action: "resized", sessionId: "session-a", x: 0, y: 0, width: 980, height: 400_000 }
   ]) {
     assert.equal(FocusBarActionSchema.safeParse(value).success, false, JSON.stringify(value) ?? "undefined");
   }
