@@ -7,6 +7,7 @@ private final class Fixture: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         checkPanelFlagsAndPlacement()
+        checkIdenticalRequestRepairsDisplacedPanel()
         checkLinearShrinkAcrossEveryPanel()
         checkRecoloringKeepsTheSameCountdown()
         checkPauseFreezesTheFill()
@@ -14,6 +15,38 @@ private final class Fixture: NSObject, NSApplicationDelegate {
         checkTurningItOffRemovesEverything()
         print(failures == 0 ? "\nAll timer bar presentation checks passed." : "\n\(failures) check(s) FAILED.")
         exit(failures == 0 ? 0 : 1)
+    }
+
+    private func checkIdenticalRequestRepairsDisplacedPanel() {
+        let deadline = Date().timeIntervalSince1970 + total
+        expect(send(enabled: true, endsAt: deadline) == 0, "the drift check starts one countdown")
+        guard let panel = panels().first,
+              let content = panel.contentView as? TimerBarContentView,
+              let screen = NSScreen.screens.first(where: { $0.frame.intersects(panel.frame) }) else {
+            expect(false, "the drift check has a panel on a connected display")
+            return
+        }
+        wait(0.2)
+        let originalPanel = ObjectIdentifier(panel)
+        let originalContent = ObjectIdentifier(content)
+        let before = Double(content.drawnWidth / panel.frame.width)
+        panel.setFrame(panel.frame.offsetBy(dx: 0, dy: -40), display: false)
+        expect(abs(panel.frame.maxY - screen.frame.maxY) > 1, "the existing panel can be displaced")
+
+        expect(send(enabled: true, endsAt: deadline) == 0, "the identical clock request is applied")
+        wait(0.1)
+        guard let repaired = panels().first(where: { ObjectIdentifier($0) == originalPanel }),
+              let repairedContent = repaired.contentView as? TimerBarContentView else {
+            expect(false, "repair keeps the existing panel")
+            return
+        }
+        let after = Double(repairedContent.drawnWidth / repaired.frame.width)
+        expect(ObjectIdentifier(repairedContent) == originalContent,
+               "repair keeps the existing panel and countdown view")
+        expect(abs(repaired.frame.maxY - screen.frame.maxY) < 0.5,
+               "an identical request restores the panel to the top edge")
+        expect(after <= before + 0.02 && before - after < 0.03,
+               "repair keeps the same countdown in progress")
     }
 
 
