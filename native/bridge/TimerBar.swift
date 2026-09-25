@@ -315,7 +315,7 @@ final class TimerBarController: NSObject {
         for display in displays {
             guard let entry = panels[display.id],
                   let frame = TimerBarPlacement.barFrame(for: display.geometry),
-                  frames[display.id] != frame else { continue }
+                  frames[display.id] != frame || entry.panel.frame != frame else { continue }
             entry.panel.setFrame(frame, display: false)
             entry.content.frame = NSRect(origin: .zero, size: frame.size)
             entry.content.layoutFill()

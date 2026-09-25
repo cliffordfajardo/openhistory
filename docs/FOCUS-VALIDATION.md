@@ -301,3 +301,18 @@ awaits user confirmation; controller and native lifecycle coverage above is auto
 Physical multiple-display reconnects, mixed scaling, Stage Manager, fullscreen applications,
 other macOS releases and actual sleep/wake remain manual validation items. Fixture notification
 and window-flag checks do not establish visibility in every WindowServer configuration.
+
+
+## Displaced timer bar recovery, 25 September 2026
+
+The installed app reproduced a 1728-by-33-point timer panel at WindowServer Y=832 instead of
+Y=0. The halo was a separate full-display panel at Y=0. Turning off Show timer bar removed the
+interior strip without removing the halo; turning it back on placed the timer at Y=0. The cause
+of the initial relocation is unknown. The confirmed persistence bug was a comparison against
+cached requested geometry that ignored the actual window frame.
+
+`npm run fixture:timer-bar` now displaces an existing native panel and sends the same clock
+request again. Before the fix, `an identical request restores the panel to the top edge` failed.
+After comparing the live panel frame too, the full fixture passes and verifies the same panel,
+countdown view and deadline remain in use. The existing active-session heartbeat and environment
+notifications perform recovery; no new timer or screen-capture path was added.
