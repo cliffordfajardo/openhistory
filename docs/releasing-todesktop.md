@@ -1,5 +1,12 @@
 # ToDesktop release process
 
+> **OpenHistory Focus:** this fork must never build or release under upstream's ToDesktop app.
+> `todesktop.ts` reads the fork's own app ID from `OPENHISTORY_FOCUS_TODESKTOP_ID` and uses the
+> bundle identifier `io.github.cliffordfajardo.openhistory-focus`; `desktop:build`,
+> `desktop:smoke-test` and `desktop:release` refuse to run without it. The app does not initialize
+> the ToDesktop runtime updater, so enable updates only after a fork-owned update channel exists.
+> The upstream details below are kept for reference.
+
 OpenHistory uses ToDesktop Platform for macOS packaging and updates. The integration is linked to ToDesktop application ID `260815ukaa3eq`, but the repository does not contain an access token or signing certificate.
 
 ## What the release architecture proves locally

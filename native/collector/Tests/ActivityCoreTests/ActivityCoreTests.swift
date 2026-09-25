@@ -2,6 +2,53 @@ import Foundation
 import Testing
 @testable import ActivityCore
 
+@Test func webmailFocusProtectionIsIndependentOfRecordingProtection() throws {
+    let gmail = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://mail.google.com/mail/u/0/#inbox", title: nil
+    ))
+    let normal = SemanticProtectionPolicy.browserProtectionStates(
+        observation: gmail, windowTitle: "Inbox", captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    #expect(normal.recording == .protected)
+    #expect(normal.focus == .safe)
+    let privateWindow = SemanticProtectionPolicy.browserProtectionStates(
+        observation: gmail, windowTitle: "New Tab - Incognito", captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    #expect(privateWindow.recording == .protected)
+    #expect(privateWindow.focus == .protected)
+    let missing = SemanticProtectionPolicy.browserProtectionStates(
+        observation: nil, windowTitle: nil, captureEmailActivity: false,
+        captureMessagingActivity: false
+    )
+    #expect(missing.recording == .unavailable)
+    #expect(missing.focus == .unavailable)
+    for (url, expected) in [
+        ("https://pornhub.com/private", BrowserProtectionObservation.protected),
+        ("https://app.slack.com/client", .protected),
+        ("https://messages.google.com/web", .protected),
+        ("https://example.com/work", .safe)
+    ] {
+        let observation = try #require(SemanticSanitizer.browserObservation(rawURL: url, title: nil))
+        let states = SemanticProtectionPolicy.browserProtectionStates(
+            observation: observation, windowTitle: nil, captureEmailActivity: false,
+            captureMessagingActivity: false
+        )
+        #expect(states.recording == expected)
+        #expect(states.focus == expected)
+    }
+    let chat = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://app.slack.com/client", title: nil
+    ))
+    let optedIn = SemanticProtectionPolicy.browserProtectionStates(
+        observation: chat, windowTitle: nil, captureEmailActivity: false,
+        captureMessagingActivity: true
+    )
+    #expect(optedIn.recording == .safe)
+    #expect(optedIn.focus == .safe)
+}
+
 @Test func unavailableBrowserURLSuppressesCaptureWithoutCreatingAPrivacyTransition() {
     let decision = SemanticProtectionPolicy.browserProtectionDecision(
         for: .unavailable,
@@ -387,6 +434,40 @@ import Testing
     #expect(SemanticProtectionPolicy.browserApplications.contains("com.apple.Safari"))
     #expect(SemanticProtectionPolicy.browserApplications.contains("org.mozilla.firefox"))
     #expect(!SemanticProtectionPolicy.browserApplications.contains("notion.id"))
+}
+
+@Test func chromeInstalledWebAppsRequireExactBundleShapeAndObservedHost() throws {
+    let appID = "abcdefghijklmnopabcdefghijklmnop"
+    let bundle = "com.google.Chrome.app.\(appID)"
+    #expect(SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: bundle))
+    for invalid in [
+        "com.google.Chrome.app.\(String(appID.dropFirst()))",
+        "com.google.Chrome.app.\(appID)a",
+        "com.google.Chrome.app.\(String(appID.dropLast()))q",
+        "com.google.Chrome.app.\(appID.uppercased())",
+        "com.google.Chrome.beta.app.\(appID)",
+        "com.google.Chrome.app.\(appID).extra",
+        "evil.com.google.Chrome.app.\(appID)"
+    ] {
+        #expect(!SemanticProtectionPolicy.isBrowserApplication(bundleIdentifier: invalid))
+    }
+
+    let observed = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://youtube.com/watch?v=example", title: nil
+    ))
+    let lookalike = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://youtube.com.evil.example/watch", title: nil
+    ))
+    #expect(observed.domain == "youtube.com")
+    #expect(lookalike.domain == "youtube.com.evil.example")
+    #expect(!SemanticProtectionPolicy.protectsBrowserObservation(observed))
+    let protected = try #require(SemanticSanitizer.browserObservation(
+        rawURL: "https://pornhub.com/private", title: nil
+    ))
+    #expect(SemanticProtectionPolicy.protectsBrowserObservation(protected))
+    #expect(SemanticProtectionPolicy.browserProtectionDecision(
+        for: .unavailable, wasProtected: true
+    ).suppressCapture)
 }
 
 @Test func semanticEventEncodingRemainsBackwardCompatibleVersionOne() throws {

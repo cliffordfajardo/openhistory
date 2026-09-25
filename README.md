@@ -4,6 +4,15 @@
 
 <h1 align="center">OpenHistory</h1>
 
+> [!NOTE]
+> **This repository is OpenHistory Focus, a fork of OpenHistory.** It adds a calm Focus companion
+> (goals, focus sessions, and a gentle amber on-screen reminder when a listed site is in front),
+> a model-free Activity timeline, minimal capture defaults, and a "keep everything local" setup.
+> It runs as its own app (`io.github.cliffordfajardo.openhistory-focus`) with its own data folder,
+> never reads upstream OpenHistory data, and does not use the upstream auto-updater.
+> Start with **[docs/FOCUS.md](docs/FOCUS.md)** for setup, permissions, privacy, architecture and
+> known limits. Everything below describes the upstream OpenHistory features this fork keeps.
+
 <p align="center">
   <strong>A private, searchable timeline of what you worked on.</strong>
 </p>
@@ -62,7 +71,7 @@ OpenHistory leaves you with a useful memory of the day without taking screenshot
 
 Collection can be paused at any time. **Settings → Data & privacy → Delete all local data** removes recorded activity, summaries, settings, saved keys, and agent connections.
 
-During first-run setup, email activity and recognized Messages/iMessage and chat activity are selected for inclusion by default. You can clear either selection before finishing setup and later control each category independently in Settings. Enabled email, messaging, or text-edit capture can contain sensitive text, so the local data directory should still be treated as private. Read the full [privacy policy](PRIVACY.md) and [security policy](SECURITY.md) before using OpenHistory with sensitive work.
+In OpenHistory Focus, first-run setup leaves email activity and Messages/iMessage and chat activity excluded, and records only app switches, window titles and browser addresses until you opt in to richer categories in Settings. Enabled email, messaging, or text-edit capture can contain sensitive text, so the local data directory should still be treated as private. Read the full [privacy policy](PRIVACY.md) and [security policy](SECURITY.md) before using OpenHistory with sensitive work.
 
 ## Quick start
 
@@ -81,8 +90,8 @@ If you'd rather inspect, modify, or build OpenHistory yourself, you'll need:
 - Xcode with Swift 6.1 or later
 
 ```bash
-git clone https://github.com/ztratar/openhistory.git
-cd openhistory
+git clone https://github.com/cliffordfajardo/openhistory.git openhistory-focus
+cd openhistory-focus
 npm ci
 npm run dev
 ```
@@ -173,7 +182,7 @@ The read-only MCP tools can:
 - find referenced files, links, and other work surfaces;
 - identify unfinished work.
 
-The default endpoint is `http://127.0.0.1:47831/openhistory/mcp`.
+The default endpoint is `http://127.0.0.1:47841/openhistory/mcp` in OpenHistory Focus (upstream OpenHistory uses 47831, so both can run side by side). Override it with `OPENHISTORY_FOCUS_MCP_PORT`.
 
 ## Where we'd love help
 
@@ -203,10 +212,11 @@ The repository includes a credential-free local path for testing the ToDesktop p
 Build a complete runnable application locally without ToDesktop credentials or an upload:
 
 ```bash
-npm run desktop:package:local
+npm run desktop:package:local        # universal native components (arm64 + x86_64)
+npm run desktop:package:local:host   # faster: this Mac's architecture only
 ```
 
-The verified, ad-hoc-signed application is written under `.todesktop/local/`. It contains only compiled application output, production dependencies, the public icon, the in-process collector bridge, and the Foundation Models worker.
+The verified, ad-hoc-signed application is written under `.todesktop/local/`, ships `LICENSE` and `NOTICE` in its resources, and is checked for private or scratch data before it is reported ready. It contains only compiled application output, production dependencies, the public icon, the in-process collector bridge, and the Foundation Models worker.
 
 Useful references:
 

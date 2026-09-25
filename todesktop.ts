@@ -1,8 +1,8 @@
 const config = {
   schemaVersion: 1,
-  id: "260815ukaa3eq",
-  appId: "io.github.ztratar.openhistory",
-  productName: "OpenHistory",
+  id: process.env.OPENHISTORY_FOCUS_TODESKTOP_ID?.trim() ?? "",
+  appId: "io.github.cliffordfajardo.openhistory-focus",
+  productName: "OpenHistory Focus",
   icon: "./resources/OpenHistory.icns",
   appPath: ".",
   packageManager: "npm",
@@ -23,7 +23,8 @@ const config = {
     "scripts/todesktop-before-build.cjs",
     "scripts/todesktop-after-pack.cjs",
     "todesktop.ts",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   filesForDistribution: [
     "!.todesktop/**",
@@ -35,10 +36,20 @@ const config = {
   extraResources: [
     {
       from: "./resources/openhistory-icon.png"
+    },
+    {
+      from: "./LICENSE"
+    },
+    {
+      from: "./NOTICE"
     }
   ],
   mac: {
-    category: "public.app-category.productivity"
+    category: "public.app-category.productivity",
+    extendInfo: {
+      NSScreenCaptureUsageDescription:
+        "OpenHistory Focus reads the screen only while an optional grayscale Focus reminder is showing, to display it in gray. Frames stay in memory and are never saved or sent."
+    }
   }
 };
 

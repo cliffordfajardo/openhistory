@@ -4,7 +4,20 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { loadActivityEvents, parseRawActivityEvent } from "./activity-event-file";
+import type { FocusBarShowResult } from "./focus-bar";
+import type {
+  FocusBarBinding,
+  FocusEdgeBinding,
+  FocusEdgeUpdateResult,
+  FocusOverlayBinding,
+  FocusOverlayShowResult,
+  FocusScreenCaptureBinding,
+  TimerBarBinding
+} from "./focus-controller";
+import type { TimerBarResult } from "./focus-timer-bar";
+import { isForegroundEvidencePacket, parseForegroundEvidencePacket } from "./foreground-evidence";
 import { ActivityPrivacyFilter } from "./privacy-policy";
+import type { SystemColorFilterBinding, SystemColorFilterSettings } from "./system-color-filter";
 
 const MAX_RECENT_EVENTS = 250;
 const ACCESSIBILITY_CHECK_INTERVAL_MS = 1_000;
@@ -32,7 +45,56 @@ export interface NativeCollectorBinding {
   stopCollector(): void;
   isTrusted(): boolean;
   requestTrust(): boolean;
+  setForegroundObservation?(generation: number): boolean;
+  showFocusOverlay?(requestJSON: string): number;
+  hideFocusOverlay?(nudgeId: string, immediate: boolean): void;
+  setFocusOverlayActionHandler?(handler: ((line: string) => void) | null): void;
+  updateFocusBar?(snapshotJSON: string): number;
+  hideFocusBar?(): void;
+  focusFocusBar?(): void;
+  setFocusBarActionHandler?(handler: ((line: string) => void) | null): void;
+  updateTimerBar?(requestJSON: string): number;
+  shutdownTimerBar?(): void;
+  updateFocusEdge?(snapshotJSON: string): number;
+  shutdownFocusEdge?(): void;
+  screenCaptureAccess?(): boolean;
+  requestScreenCaptureAccess?(): boolean;
+  systemColorFilterRead?(): SystemColorFilterSettings | null;
+  systemColorFilterWrite?(enabled: boolean, type: number): boolean;
 }
+
+const FOCUS_OVERLAY_RESULTS: Record<number, FocusOverlayShowResult> = {
+  0: "shown",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display",
+  4: "foreground_changed",
+  5: "shown_fallback_permission",
+  6: "shown_fallback_unavailable",
+  7: "shown_fallback_window",
+  8: "shown_fallback_window_spans_displays"
+};
+
+const FOCUS_BAR_RESULTS: Record<number, FocusBarShowResult> = {
+  0: "shown",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display"
+};
+
+const TIMER_BAR_RESULTS: Record<number, TimerBarResult> = {
+  0: "applied",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display"
+};
+
+const FOCUS_EDGE_RESULTS: Record<number, FocusEdgeUpdateResult> = {
+  0: "applied",
+  1: "invalid_request",
+  2: "not_main_thread",
+  3: "no_display"
+};
 
 export class CollectorService extends EventEmitter {
   state: CollectorState = "stopped";
@@ -44,6 +106,7 @@ export class CollectorService extends EventEmitter {
   private accessibilityTimer?: ReturnType<typeof setInterval>;
   private privacyFilter = new ActivityPrivacyFilter();
   private nativeBinding?: NativeCollectorBinding;
+  private foregroundGeneration = 0;
 
   constructor(
     readonly dataDirectory: string,
@@ -73,6 +136,8 @@ export class CollectorService extends EventEmitter {
       captureMessagingActivity: this.settings.captureMessagingActivity
     });
 
+    this.emit("foregroundReset");
+
     try {
       const native = this.native();
       this.accessibilityTrusted = native.isTrusted();
@@ -91,6 +156,10 @@ export class CollectorService extends EventEmitter {
         name: error instanceof Error ? error.name : "UnknownError"
       });
     }
+  }
+
+  get currentSettings(): CollectionSettings {
+    return this.settings;
   }
 
   setSettings(settings: CollectionSettings): void {
@@ -146,7 +215,147 @@ export class CollectorService extends EventEmitter {
     this.active = false;
     if (nextState === "paused") this.enabled = false;
     this.state = nextState;
+    this.emit("foregroundReset");
     this.emit("state", this.state);
+  }
+
+  /**
+   * Asks the existing native sampler for ephemeral foreground evidence (nonzero generation) or
+   * stops it (zero). The native host keeps the generation across collector restarts.
+   */
+  setForegroundObservation(generation: number): void {
+    this.foregroundGeneration = generation;
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return;
+    }
+    native.setForegroundObservation?.(generation);
+  }
+
+  get foregroundObservationGeneration(): number {
+    return this.foregroundGeneration;
+  }
+
+  /** The in-process reminder surface, or undefined when the native module lacks it. */
+  focusOverlay(): FocusOverlayBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { showFocusOverlay, hideFocusOverlay, setFocusOverlayActionHandler } = native;
+    if (typeof showFocusOverlay !== "function" || typeof hideFocusOverlay !== "function" ||
+        typeof setFocusOverlayActionHandler !== "function") return undefined;
+    return {
+      show: (request) => FOCUS_OVERLAY_RESULTS[showFocusOverlay.call(native, JSON.stringify(request))] ??
+        "invalid_request",
+      hide: (nudgeId, immediate) => hideFocusOverlay.call(native, nudgeId, immediate),
+      setActionHandler: (handler) => setFocusOverlayActionHandler.call(native, handler)
+    };
+  }
+
+  /** The native floating bar, or undefined when the native module predates it. */
+  focusBar(): FocusBarBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { updateFocusBar, hideFocusBar, focusFocusBar, setFocusBarActionHandler } = native;
+    if (typeof updateFocusBar !== "function" || typeof hideFocusBar !== "function" ||
+        typeof focusFocusBar !== "function" || typeof setFocusBarActionHandler !== "function") {
+      return undefined;
+    }
+    return {
+      update: (snapshot) => FOCUS_BAR_RESULTS[updateFocusBar.call(native, JSON.stringify(snapshot))] ??
+        "invalid_request",
+      hide: () => hideFocusBar.call(native),
+      focus: () => focusFocusBar.call(native),
+      setActionHandler: (handler) => setFocusBarActionHandler.call(native, handler)
+    };
+  }
+
+  /**
+   * The native timer bar, or undefined when the native module predates it. It is detected on its
+   * own, so a build can have the floating bar without this one, or the other way round.
+   */
+  timerBar(): TimerBarBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { updateTimerBar, shutdownTimerBar } = native;
+    if (typeof updateTimerBar !== "function" || typeof shutdownTimerBar !== "function") {
+      return undefined;
+    }
+    return {
+      update: (request) => TIMER_BAR_RESULTS[updateTimerBar.call(native, JSON.stringify(request))] ??
+        "invalid_request",
+      shutdown: () => shutdownTimerBar.call(native)
+    };
+  }
+
+  /**
+   * The native edge owner, or undefined when the native module predates it. That older module
+   * still draws its own amber reminder edge from each reminder request.
+   */
+  focusEdge(): FocusEdgeBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { updateFocusEdge, shutdownFocusEdge } = native;
+    if (typeof updateFocusEdge !== "function" || typeof shutdownFocusEdge !== "function") {
+      return undefined;
+    }
+    return {
+      update: (snapshot) => FOCUS_EDGE_RESULTS[updateFocusEdge.call(native, JSON.stringify(snapshot))] ??
+        "invalid_request",
+      shutdown: () => shutdownFocusEdge.call(native)
+    };
+  }
+
+  /**
+   * Screen Recording access for the grayscale reminder, or undefined when the native module
+   * predates it (its overlay would ignore a grayscale request).
+   */
+  focusScreenCapture(): FocusScreenCaptureBinding | undefined {
+    if (!this.focusOverlay()) return undefined;
+    const native = this.native();
+    const { screenCaptureAccess, requestScreenCaptureAccess } = native;
+    if (typeof screenCaptureAccess !== "function" || typeof requestScreenCaptureAccess !== "function") {
+      return undefined;
+    }
+    return {
+      access: () => screenCaptureAccess.call(native) === true,
+      request: () => requestScreenCaptureAccess.call(native) === true
+    };
+  }
+
+  /** The private Color Filters calls, or undefined when the native module predates them. */
+  focusSystemFilter(): SystemColorFilterBinding | undefined {
+    let native: NativeCollectorBinding;
+    try {
+      native = this.native();
+    } catch {
+      return undefined;
+    }
+    const { systemColorFilterRead, systemColorFilterWrite } = native;
+    if (typeof systemColorFilterRead !== "function" || typeof systemColorFilterWrite !== "function") {
+      return undefined;
+    }
+    return {
+      read: () => systemColorFilterRead.call(native) ?? null,
+      write: (settings) => systemColorFilterWrite.call(native, settings.enabled, settings.type) === true
+    };
   }
 
   private restart(): void {
@@ -168,6 +377,13 @@ export class CollectorService extends EventEmitter {
 
   private handleNativeEvent(line: string, generation: number): void {
     if (generation !== this.generation) return;
+    if (isForegroundEvidencePacket(line)) {
+      const evidence = parseForegroundEvidencePacket(line, {
+        captureMessagingActivity: this.settings.captureMessagingActivity
+      });
+      if (evidence && evidence.generation === this.foregroundGeneration) this.emit("foreground", evidence);
+      return;
+    }
     const rawEvent = parseRawActivityEvent(line);
     if (!rawEvent) return;
     for (const event of this.privacyFilter.filter([rawEvent])) {

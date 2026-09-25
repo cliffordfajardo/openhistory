@@ -44,6 +44,13 @@ if [ "${configuration}" = "release" ]; then optimization="-O"; fi
 rm -rf "${build_root}"
 mkdir -p "${build_root}" "${output_root}"
 
+# The bridge links ActivityCore's object files and module directly, which requires SwiftPM's
+# classic "native" layout (Modules/ and ActivityCore.build/*.o). Swift 6.4 defaults to the
+# swiftbuild layout, so request the native build system explicitly; Swift 6.1 accepts the same
+# flag. Override with OPENHISTORY_SWIFT_BUILD_SYSTEM only when the layout is known to match.
+swift_build_system="${OPENHISTORY_SWIFT_BUILD_SYSTEM:-native}"
+activity_core_sources="$(find native/collector/Sources/ActivityCore -name '*.swift' | wc -l | tr -d ' ')"
+
 build_architecture() {
   swift_arch="$1"
   output_name="$2"
@@ -52,17 +59,36 @@ build_architecture() {
   mkdir -p "${architecture_root}" "${swift_scratch_path}"
   swift build \
     --disable-sandbox \
+    --build-system "${swift_build_system}" \
     --package-path native/collector \
     --scratch-path "${swift_scratch_path}" \
     --configuration "${configuration}" \
     --arch "${swift_arch}" >&2
   bin_path="$(swift build \
     --disable-sandbox \
+    --build-system "${swift_build_system}" \
     --package-path native/collector \
     --scratch-path "${swift_scratch_path}" \
     --configuration "${configuration}" \
     --arch "${swift_arch}" \
     --show-bin-path)"
+
+  if [ ! -d "${bin_path}/Modules" ] || [ ! -d "${bin_path}/ActivityCore.build" ]; then
+    echo "SwiftPM output at ${bin_path} lacks Modules/ or ActivityCore.build/; the bridge needs the native build system layout" >&2
+    exit 1
+  fi
+  activity_core_objects_file="${architecture_root}/activity-core-objects.txt"
+  find "${bin_path}/ActivityCore.build" -maxdepth 1 -name '*.swift.o' | LC_ALL=C sort > "${activity_core_objects_file}"
+  activity_core_objects="$(wc -l < "${activity_core_objects_file}" | tr -d ' ')"
+  if [ "${activity_core_objects}" != "${activity_core_sources}" ]; then
+    echo "Expected ${activity_core_sources} ActivityCore objects but found ${activity_core_objects} in ${bin_path}/ActivityCore.build" >&2
+    exit 1
+  fi
+
+  set --
+  while IFS= read -r activity_core_object; do
+    set -- "$@" "${activity_core_object}"
+  done < "${activity_core_objects_file}"
 
   xcrun swiftc \
     -target "${swift_arch}-apple-macos14.0" \
@@ -77,10 +103,19 @@ build_architecture() {
     native/collector/Sources/ActivityCollector/PointerEventTap.swift \
     native/collector/Sources/ActivityCollector/CollectorRuntime.swift \
     native/bridge/EmbeddedCollectorBridge.swift \
-    "${bin_path}/ActivityCore.build/ActivityEvent.swift.o" \
-    "${bin_path}/ActivityCore.build/EventWriter.swift.o" \
-    "${bin_path}/ActivityCore.build/SemanticObservation.swift.o" \
-    "${bin_path}/ActivityCore.build/SemanticProtectionPolicy.swift.o" \
+    native/bridge/FocusOverlay.swift \
+    native/bridge/FocusEdge.swift \
+    native/bridge/FocusBar.swift \
+    native/bridge/TimerBar.swift \
+    native/bridge/FocusGrayscale.swift \
+    native/bridge/FocusWindowGrayscale.swift \
+    "$@" \
+    -framework ScreenCaptureKit \
+    -framework CoreImage \
+    -framework CoreMedia \
+    -framework CoreVideo \
+    -framework Metal \
+    -framework QuartzCore \
     -Xlinker -install_name \
     -Xlinker @rpath/libOpenHistoryCollector.dylib \
     -o "${architecture_root}/libOpenHistoryCollector.dylib"

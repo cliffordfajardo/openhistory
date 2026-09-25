@@ -1,19 +1,23 @@
 {
-  "name": "openhistory",
-  "productName": "OpenHistory",
+  "name": "openhistory-focus",
+  "productName": "OpenHistory Focus",
   "version": "0.4.3",
   "private": true,
   "author": "Zach Tratar <955182+ztratar@users.noreply.github.com>",
+  "contributors": [
+    "OpenHistory contributors",
+    "Clifford Fajardo <cliffordfajardo@gmail.com>"
+  ],
   "license": "MIT",
-  "description": "A private, local-first work timeline with daily rollups for macOS.",
+  "description": "OpenHistory Focus: a calm, local-first focus companion and work timeline for macOS, forked from OpenHistory.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ztratar/openhistory.git"
+    "url": "git+https://github.com/cliffordfajardo/openhistory.git"
   },
   "bugs": {
-    "url": "https://github.com/ztratar/openhistory/issues"
+    "url": "https://github.com/cliffordfajardo/openhistory/issues"
   },
-  "homepage": "https://github.com/ztratar/openhistory#readme",
+  "homepage": "https://github.com/cliffordfajardo/openhistory#readme",
   "engines": {
     "node": ">=22"
   },
@@ -28,6 +32,14 @@
       {
         "from": "resources/openhistory-icon.png",
         "to": "openhistory-icon.png"
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "NOTICE",
+        "to": "NOTICE"
       }
     ]
   },
@@ -61,6 +73,11 @@
     "desktop:tools": "npm ci --prefix tools/todesktop",
     "desktop:verify": "npm run build:electron && npm run package:native:release && npm run package:native:todesktop && node --import tsx scripts/verify-todesktop-spike.ts --native-bundle && node --import tsx scripts/test-todesktop-before-build.ts && node --import tsx scripts/test-todesktop-after-pack.ts",
     "desktop:package:local": "npm run build:electron && npm run package:native:todesktop && node --import tsx scripts/package-local-app.ts",
+    "desktop:package:local:host": "npm run build:electron && npm run package:native:release && node --import tsx scripts/package-local-app.ts --host",
+    "test:native-bridge-smoke": "node --import tsx scripts/smoke-native-bridge.ts",
+    "test:grayscale-gpu": "sh scripts/test-focus-grayscale-gpu.sh",
+    "fixture:focus-edge": "sh scripts/build-focus-edge-presentation-fixture.sh",
+    "fixture:timer-bar": "sh scripts/build-focus-timer-bar-presentation-fixture.sh",
     "desktop:dry-run": "npm run build:electron && npm run package:native:todesktop && node tools/todesktop/node_modules/@todesktop/cli/dist/cli.js build --dry-run --files",
     "desktop:build": "node scripts/require-todesktop-credentials.cjs && npm run build:electron && npm run package:native:todesktop && node tools/todesktop/node_modules/@todesktop/cli/dist/cli.js build --ephemeral --follow-logs",
     "desktop:smoke-test": "node scripts/require-todesktop-credentials.cjs && node tools/todesktop/node_modules/@todesktop/cli/dist/cli.js smoke-test --ephemeral --latest",

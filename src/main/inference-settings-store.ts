@@ -31,7 +31,7 @@ export class InferenceSettingsStore {
     this.path = resolve(dataDirectory, "inference-settings.json");
     this.defaults = {
       version: 1,
-      enabled: true,
+      enabled: false,
       provider: "openai",
       models: {
         ...DEFAULT_INFERENCE_MODELS,

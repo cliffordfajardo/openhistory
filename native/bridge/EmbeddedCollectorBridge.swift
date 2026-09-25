@@ -50,8 +50,12 @@ private final class EmbeddedEventSink: @unchecked Sendable {
     }
 
     func send(_ data: Data) {
-        String(decoding: data, as: UTF8.self).withCString { line in
-            callback(line, context)
+        send(String(decoding: data, as: UTF8.self))
+    }
+
+    func send(_ line: String) {
+        line.withCString { pointer in
+            callback(pointer, context)
         }
     }
 }
@@ -59,6 +63,7 @@ private final class EmbeddedEventSink: @unchecked Sendable {
 private final class EmbeddedCollectorHost: @unchecked Sendable {
     static let shared = EmbeddedCollectorHost()
     private var collector: ApplicationActivityCollector?
+    private var foregroundGeneration: UInt64 = 0
 
     func start(
         dataDirectory: String,
@@ -81,8 +86,26 @@ private final class EmbeddedCollectorHost: @unchecked Sendable {
             writer: writer,
             configuration: configuration.collectorConfiguration
         )
+        collector.foregroundEvidenceHandler = { evidence, sampledWindow in
+            MainActor.assumeIsolated {
+                FocusOverlayController.shared.foregroundEvidenceChanged(evidence, sampledWindow: sampledWindow)
+            }
+            if let packet = evidence.packet() { sink.send(packet) }
+        }
+        collector.pointerExclusion = { point in
+            MainActor.assumeIsolated {
+                FocusOverlayController.shared.recentlyContainsCardPoint(point) ||
+                    FocusBarController.shared.containsPoint(point)
+            }
+        }
         self.collector = collector
         collector.start()
+        collector.setForegroundObservation(generation: foregroundGeneration)
+    }
+
+    func setForegroundObservation(generation: UInt64) {
+        foregroundGeneration = generation
+        collector?.setForegroundObservation(generation: generation)
     }
 
     func stop() {
@@ -119,4 +142,11 @@ public func openHistoryCollectorStart(
 public func openHistoryCollectorStop() {
     guard Thread.isMainThread else { return }
     EmbeddedCollectorHost.shared.stop()
+}
+
+@_cdecl("openhistory_collector_set_foreground_observation")
+public func openHistoryCollectorSetForegroundObservation(_ generation: UInt64) -> Int32 {
+    guard Thread.isMainThread else { return 2 }
+    EmbeddedCollectorHost.shared.setForegroundObservation(generation: generation)
+    return 0
 }

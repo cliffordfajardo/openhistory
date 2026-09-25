@@ -151,6 +151,21 @@ export function isProtectedActivityEvent(
     isSensitiveTextField(event.element);
 }
 
+export function isProtectedFocusHost(
+  domain: string,
+  bundleIdentifier: string,
+  options: { captureMessagingActivity: boolean }
+): boolean {
+  const application = { bundleIdentifier, localizedName: null, processIdentifier: 1 };
+  return !isBrowserEvent({ application }) ||
+    isProtectedAdultWebDomain(domain) ||
+    isProtectedActivityEvent({
+      kind: "url_changed",
+      application,
+      browser: { url: `https://${domain}/`, domain }
+    }, { captureEmailActivity: true, captureMessagingActivity: options.captureMessagingActivity });
+}
+
 function isMessagingBrowserObservation(browser: ActivityEvent["browser"]): boolean {
   if (!browser) return false;
   const domain = normalizeDomain(browser.domain);
@@ -235,9 +250,12 @@ export class ActivityPrivacyFilter {
   }
 }
 
-function isBrowserEvent(event: Pick<ActivityEvent, "application">): boolean {
+export function isBrowserEvent(event: Pick<ActivityEvent, "application">): boolean {
   const bundleIdentifier = event.application?.bundleIdentifier;
-  return Boolean(bundleIdentifier && BROWSER_BUNDLE_IDENTIFIERS.has(bundleIdentifier));
+  return Boolean(bundleIdentifier && (
+    BROWSER_BUNDLE_IDENTIFIERS.has(bundleIdentifier) ||
+    /^com\.google\.Chrome\.app\.[a-p]{32}$/.test(bundleIdentifier)
+  ));
 }
 
 function browserKey(event: Pick<ActivityEvent, "application">): string | undefined {

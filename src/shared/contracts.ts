@@ -1,4 +1,15 @@
 import type {
+  ActivityDayView,
+  FocusBarPresentation,
+  FocusEdgePatch,
+  FocusExperience,
+  FocusPreferences,
+  FocusSessionEdit,
+  FocusStartRequest,
+  FocusViewState,
+  GoalDraft
+} from "./focus";
+import type {
   CloudInferenceProvider,
   InferenceProvider,
   InferenceSettings,
@@ -21,6 +32,7 @@ export const IPC_CHANNELS = {
   clearInferenceApiKey: "openhistory:clear-inference-api-key",
   acceptPrivacyNotice: "openhistory:accept-privacy-notice",
   completeInferenceOnboarding: "openhistory:complete-inference-onboarding",
+  completeLocalOnlyOnboarding: "openhistory:complete-local-only-onboarding",
   refreshAppleAvailability: "openhistory:refresh-apple-availability",
   authorizeCloudInference: "openhistory:authorize-cloud-inference",
   requestAccessibility: "openhistory:request-accessibility",
@@ -43,7 +55,33 @@ export const IPC_CHANNELS = {
   dailyRollupState: "openhistory:daily-rollup-state",
   agentAccessState: "openhistory:agent-access-state",
   bootstrapState: "openhistory:bootstrap-state",
-  openSettings: "openhistory:open-settings"
+  openSettings: "openhistory:open-settings",
+  getFocusState: "openhistory:focus-get-state",
+  saveGoal: "openhistory:focus-save-goal",
+  deleteGoal: "openhistory:focus-delete-goal",
+  selectGoal: "openhistory:focus-select-goal",
+  saveFocusPreferences: "openhistory:focus-save-preferences",
+  startFocus: "openhistory:focus-start",
+  stopFocus: "openhistory:focus-stop",
+  snoozeFocus: "openhistory:focus-snooze",
+  resumeFocus: "openhistory:focus-resume",
+  pauseFocusSession: "openhistory:focus-pause-session",
+  resumeFocusSession: "openhistory:focus-resume-session",
+  editFocusSession: "openhistory:focus-edit-session",
+  setFocusBarPresentation: "openhistory:focus-set-bar-presentation",
+  setFocusShowTimerBar: "openhistory:focus-set-show-timer-bar",
+  setFocusProgressColor: "openhistory:focus-set-progress-color",
+  focusFocusBar: "openhistory:focus-focus-bar",
+  openFocusEditor: "openhistory:focus-open-editor",
+  previewFocusReminder: "openhistory:focus-preview-reminder",
+  setFocusExperience: "openhistory:focus-set-experience",
+  setFocusEdge: "openhistory:focus-set-edge",
+  restoreFocusSystemColors: "openhistory:focus-restore-system-colors",
+  requestScreenCapture: "openhistory:focus-request-screen-capture",
+  refreshScreenCapture: "openhistory:focus-refresh-screen-capture",
+  openScreenCaptureSettings: "openhistory:focus-open-screen-capture-settings",
+  focusState: "openhistory:focus-state",
+  getActivityDay: "openhistory:get-activity-day"
 } as const;
 
 export interface ApplicationDescriptor {
@@ -195,6 +233,8 @@ export interface CollectionSettings {
   cloudInferenceConsents: CloudInferenceProvider[];
   appearanceMode: "system" | "light" | "dark";
   appPresentationMode: AppPresentationMode;
+  /** Persistent capture pause, honored by the header, tray and every launch. */
+  capturePaused: boolean;
   captureWindowTitles: boolean;
   captureFocusedElements: boolean;
   captureTextInput: boolean;
@@ -282,6 +322,13 @@ export interface BootstrapState {
   accessibilityTrusted: boolean;
   dailyRollup: DailyRollupState;
   agentAccess: AgentAccessState;
+  focus: FocusViewState;
+}
+
+export interface LocalOnlyOnboardingSelection {
+  captureEmailActivity?: boolean;
+  captureMessagingActivity?: boolean;
+  appPresentationMode?: AppPresentationMode;
 }
 
 export interface OpenHistoryBridge {
@@ -293,6 +340,7 @@ export interface OpenHistoryBridge {
   clearInferenceApiKey(provider: InferenceProvider): Promise<BootstrapState>;
   acceptPrivacyNotice(): Promise<BootstrapState>;
   completeInferenceOnboarding(selection: InferenceOnboardingSelection): Promise<BootstrapState>;
+  completeLocalOnlyOnboarding(selection: LocalOnlyOnboardingSelection): Promise<BootstrapState>;
   refreshAppleAvailability(): Promise<BootstrapState>;
   authorizeCloudInference(provider: CloudInferenceProvider): Promise<BootstrapState>;
   requestAccessibilityPermission(): Promise<BootstrapState>;
@@ -316,6 +364,38 @@ export interface OpenHistoryBridge {
   onAgentAccessState(listener: (state: AgentAccessState) => void): () => void;
   onBootstrapState(listener: (state: BootstrapState) => void): () => void;
   onOpenSettings(listener: () => void): () => void;
+  getFocusState(): Promise<FocusViewState>;
+  saveGoal(draft: GoalDraft): Promise<FocusViewState>;
+  deleteGoal(id: string): Promise<FocusViewState>;
+  selectGoal(id: string | null): Promise<FocusViewState>;
+  saveFocusPreferences(preferences: Pick<FocusPreferences, "domains" | "durationMinutes">): Promise<FocusViewState>;
+  startFocus(request: FocusStartRequest): Promise<FocusViewState>;
+  stopFocus(): Promise<FocusViewState>;
+  snoozeFocus(): Promise<FocusViewState>;
+  resumeFocus(): Promise<FocusViewState>;
+  /** Freezes the running session: the countdown stops and no reminders appear. */
+  pauseFocusSession(): Promise<FocusViewState>;
+  resumeFocusSession(): Promise<FocusViewState>;
+  editFocusSession(edit: FocusSessionEdit): Promise<FocusViewState>;
+  setFocusBarPresentation(presentation: FocusBarPresentation): Promise<FocusViewState>;
+  /** Shows or hides the strip across the menu region of every display. */
+  setFocusShowTimerBar(showTimerBar: boolean): Promise<FocusViewState>;
+  /** Sets the one `#rrggbb` color both progress fills are drawn in. */
+  setFocusProgressColor(progressColor: string): Promise<FocusViewState>;
+  /** Shows the floating bar and moves keyboard focus into it. */
+  focusFocusBar(): Promise<FocusViewState>;
+  onOpenFocusEditor(listener: () => void): () => void;
+  previewFocusReminder(): Promise<FocusViewState>;
+  setFocusExperience(experience: FocusExperience): Promise<FocusViewState>;
+  /** Changes the screen edge's mode, own color or progress-color sync; omitted fields are kept. */
+  setFocusEdge(patch: FocusEdgePatch): Promise<FocusViewState>;
+  /** Puts back the Color Filters settings from before system grayscale. */
+  restoreFocusSystemColors(): Promise<FocusViewState>;
+  requestScreenCaptureAccess(): Promise<FocusViewState>;
+  refreshScreenCaptureAccess(): Promise<FocusViewState>;
+  openScreenCaptureSettings(): Promise<void>;
+  onFocusState(listener: (state: FocusViewState) => void): () => void;
+  getActivityDay(date: string): Promise<ActivityDayView>;
 }
 
 export interface InferenceOnboardingSelection {

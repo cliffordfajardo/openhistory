@@ -30,9 +30,11 @@ expect(packageJson.scripts?.["desktop:package:local"] === "npm run build:electro
 expect(packageJson.scripts?.["package:native:todesktop"]?.includes("native/bridge/build.sh universal release") === true, "ToDesktop native packaging must build the universal in-process collector bridge");
 expect(packageJson.scripts?.["desktop:smoke-test"]?.includes("smoke-test --ephemeral --latest") === true, "credentialed ToDesktop smoke-test command is missing");
 expect(packageJson.scripts?.["desktop:verify:signed"] === "sh scripts/verify-signed-macos-app.sh", "signed macOS verification command changed");
-expect(config.id === "260815ukaa3eq", "ToDesktop application identifier changed");
-expect(config.appId === "io.github.ztratar.openhistory", "production bundle identifier changed");
-expect(config.productName === "OpenHistory", "ToDesktop product name changed");
+expect(config.id !== "260815ukaa3eq", "fork must not publish under the upstream ToDesktop application");
+expect(config.id === (process.env.OPENHISTORY_FOCUS_TODESKTOP_ID?.trim() ?? ""), "ToDesktop application identifier must come from OPENHISTORY_FOCUS_TODESKTOP_ID");
+expect(config.appId === "io.github.cliffordfajardo.openhistory-focus", "production bundle identifier changed");
+expect(config.productName === "OpenHistory Focus", "ToDesktop product name changed");
+expect(packageJson.scripts?.["desktop:package:local:host"]?.includes("scripts/package-local-app.ts --host") === true, "host-only local packaging command is missing");
 expect(config.asar === true, "application code must remain in ASAR");
 expect(config.fuses?.runAsNode === false, "runAsNode fuse must remain disabled");
 expect(config.fuses?.enableNodeOptionsEnvironmentVariable === false, "NODE_OPTIONS fuse must remain disabled");
@@ -50,7 +52,9 @@ for (const required of [
   "out/**",
   ".todesktop/native/universal/**",
   "scripts/todesktop-before-build.cjs",
-  "scripts/todesktop-after-pack.cjs"
+  "scripts/todesktop-after-pack.cjs",
+  "LICENSE",
+  "NOTICE"
 ]) {
   expect(uploadPatterns.includes(required), `ToDesktop upload manifest is missing ${required}`);
 }
@@ -64,10 +68,35 @@ const mainSource = readFileSync(resolve(root, "src/main/index.ts"), "utf8");
 const collectorSource = readFileSync(resolve(root, "src/main/collector-service.ts"), "utf8");
 const appleSource = readFileSync(resolve(root, "src/main/inference/providers/apple.ts"), "utf8");
 const localPackagerSource = readFileSync(resolve(root, "scripts/package-local-app.ts"), "utf8");
+const bridgeBuildSource = readFileSync(resolve(root, "native/bridge/build.sh"), "utf8");
+expect(bridgeBuildSource.includes("native/bridge/FocusOverlay.swift"), "native bridge must compile the Focus overlay");
+expect(bridgeBuildSource.includes("native/bridge/FocusGrayscale.swift") &&
+  bridgeBuildSource.includes("-framework ScreenCaptureKit"), "native bridge must compile and link the grayscale reminder");
+expect(bridgeBuildSource.includes("native/bridge/FocusWindowGrayscale.swift"),
+  "native bridge must compile the window-only grayscale reminder");
+expect(bridgeBuildSource.includes("native/bridge/TimerBar.swift"),
+  "native bridge must compile the persistent timer bar");
+expect(/\bscreen\b/i.test(config.mac?.extendInfo?.NSScreenCaptureUsageDescription ?? ""),
+  "ToDesktop Info.plist must explain Screen Recording use");
+expect(localPackagerSource.includes("extendInfo: toDesktopConfig.mac.extendInfo"),
+  "local package must carry the same Info.plist usage descriptions as ToDesktop");
+expect(bridgeBuildSource.includes("ActivityCore.build") && bridgeBuildSource.includes("-name '*.swift.o'"),
+  "native bridge must link every ActivityCore object instead of an enumerated list");
 const beforeBuildSource = readFileSync(resolve(root, "scripts/todesktop-before-build.cjs"), "utf8");
 const signedVerifierPath = resolve(root, "scripts/verify-signed-macos-app.sh");
 const signedVerifierSource = readFileSync(signedVerifierPath, "utf8");
-expect(mainSource.includes("todesktop.init();"), "ToDesktop runtime is not initialized in the main process");
+expect(!mainSource.includes("todesktop.init("), "upstream ToDesktop auto-update must not be initialized in the fork");
+expect(!mainSource.includes("@todesktop/runtime"), "main process must not import the upstream ToDesktop runtime");
+const configSource = readFileSync(resolve(root, "src/main/config.ts"), "utf8");
+expect(configSource.includes('app.setPath("userData"'), "fork must set its own userData directory");
+expect(!configSource.includes("local-computer-history"), "fork must not adopt legacy upstream data directories");
+expect(mainSource.indexOf("configureAppIdentity();") >= 0 &&
+  mainSource.indexOf("configureAppIdentity();") < mainSource.indexOf("requestSingleInstanceLock"),
+"app identity must be configured before the single-instance lock");
+expect(localPackagerSource.includes('resolve(root, "LICENSE")') && localPackagerSource.includes('resolve(root, "NOTICE")'),
+  "local package must ship LICENSE and NOTICE");
+expect((config.extraResources ?? []).some((resource) => resource.from === "./NOTICE"),
+  "ToDesktop package must ship NOTICE");
 expect(mainSource.includes("setPermissionCheckHandler(() => false)"), "renderer permission checks must fail closed");
 expect(mainSource.includes("setPermissionRequestHandler"), "renderer permission requests must be denied explicitly");
 expect(mainSource.includes("will-navigate"), "top-level renderer navigation must be guarded");

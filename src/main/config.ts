@@ -1,8 +1,16 @@
 import { app } from "electron";
 import { config as loadDotEnv } from "dotenv";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { InferenceProvider } from "@shared/inference";
+
+export const APP_IDENTITY = {
+  productName: "OpenHistory Focus",
+  bundleIdentifier: "io.github.cliffordfajardo.openhistory-focus",
+  userDataDirectoryName: "OpenHistory Focus"
+} as const;
+
+export const DEFAULT_MCP_PORT = 47_841;
 
 export interface RuntimeConfig {
   dataDirectory: string;
@@ -10,6 +18,15 @@ export interface RuntimeConfig {
   inferenceApiKeys: Record<InferenceProvider, string | undefined>;
   inferenceModels: Record<InferenceProvider, string>;
   mcpPort: number;
+}
+
+/**
+ * Must run before app.requestSingleInstanceLock(): the lock, cookies, caches and the default
+ * activity-data root all derive from userData, which must not be upstream's directory.
+ */
+export function configureAppIdentity(): void {
+  app.setName(APP_IDENTITY.productName);
+  app.setPath("userData", join(app.getPath("appData"), APP_IDENTITY.userDataDirectoryName));
 }
 
 function loadLocalEnvironment(): void {
@@ -28,21 +45,13 @@ function loadLocalEnvironment(): void {
 
 export function getRuntimeConfig(): RuntimeConfig {
   loadLocalEnvironment();
-  const customDataDirectory = process.env.OPENHISTORY_DATA_DIR?.trim()
-    || process.env.COMPUTER_HISTORY_DATA_DIR?.trim();
-  const legacyDataDirectory = resolve(
-    app.getPath("appData"),
-    "local-computer-history",
-    "activity-data"
-  );
-  const defaultDataDirectory = existsSync(legacyDataDirectory)
-    ? legacyDataDirectory
-    : resolve(app.getPath("userData"), "activity-data");
+  const customDataDirectory = process.env.OPENHISTORY_FOCUS_DATA_DIR?.trim();
+  const defaultDataDirectory = resolve(app.getPath("userData"), "activity-data");
 
   return {
     dataDirectory: customDataDirectory || defaultDataDirectory,
     adoptExistingDataDirectory: customDataDirectory
-      ? process.env.OPENHISTORY_ADOPT_DATA_DIR?.trim() === "1"
+      ? process.env.OPENHISTORY_FOCUS_ADOPT_DATA_DIR?.trim() === "1"
       : true,
     inferenceApiKeys: {
       apple: undefined,
@@ -56,12 +65,12 @@ export function getRuntimeConfig(): RuntimeConfig {
       anthropic: process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-5",
       kimi: process.env.MOONSHOT_MODEL?.trim() || "kimi-k3"
     },
-    mcpPort: localPort(process.env.OPENHISTORY_MCP_PORT)
+    mcpPort: localPort(process.env.OPENHISTORY_FOCUS_MCP_PORT)
   };
 }
 
-function localPort(value: string | undefined): number {
-  if (!value?.trim()) return 47_831;
+export function localPort(value: string | undefined): number {
+  if (!value?.trim()) return DEFAULT_MCP_PORT;
   const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535 ? parsed : 47_831;
+  return Number.isInteger(parsed) && parsed >= 1_024 && parsed <= 65_535 ? parsed : DEFAULT_MCP_PORT;
 }

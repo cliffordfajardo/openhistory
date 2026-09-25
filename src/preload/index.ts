@@ -8,6 +8,7 @@ import {
   type DailyRollupState,
   type TimelineState
 } from "@shared/contracts";
+import type { FocusViewState } from "@shared/focus";
 import { contextBridge, ipcRenderer } from "electron";
 
 const bridge: OpenHistoryBridge = {
@@ -25,6 +26,8 @@ const bridge: OpenHistoryBridge = {
   acceptPrivacyNotice: () => ipcRenderer.invoke(IPC_CHANNELS.acceptPrivacyNotice),
   completeInferenceOnboarding: (selection) =>
     ipcRenderer.invoke(IPC_CHANNELS.completeInferenceOnboarding, selection),
+  completeLocalOnlyOnboarding: (selection) =>
+    ipcRenderer.invoke(IPC_CHANNELS.completeLocalOnlyOnboarding, selection),
   refreshAppleAvailability: () =>
     ipcRenderer.invoke(IPC_CHANNELS.refreshAppleAvailability),
   authorizeCloudInference: (provider) =>
@@ -95,7 +98,47 @@ const bridge: OpenHistoryBridge = {
     const handler = (): void => listener();
     ipcRenderer.on(IPC_CHANNELS.openSettings, handler);
     return () => ipcRenderer.removeListener(IPC_CHANNELS.openSettings, handler);
-  }
+  },
+  getFocusState: () => ipcRenderer.invoke(IPC_CHANNELS.getFocusState),
+  saveGoal: (draft) => ipcRenderer.invoke(IPC_CHANNELS.saveGoal, draft),
+  deleteGoal: (id) => ipcRenderer.invoke(IPC_CHANNELS.deleteGoal, id),
+  selectGoal: (id) => ipcRenderer.invoke(IPC_CHANNELS.selectGoal, id),
+  saveFocusPreferences: (preferences) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveFocusPreferences, preferences),
+  startFocus: (request) => ipcRenderer.invoke(IPC_CHANNELS.startFocus, request),
+  stopFocus: () => ipcRenderer.invoke(IPC_CHANNELS.stopFocus),
+  snoozeFocus: () => ipcRenderer.invoke(IPC_CHANNELS.snoozeFocus),
+  resumeFocus: () => ipcRenderer.invoke(IPC_CHANNELS.resumeFocus),
+  pauseFocusSession: () => ipcRenderer.invoke(IPC_CHANNELS.pauseFocusSession),
+  resumeFocusSession: () => ipcRenderer.invoke(IPC_CHANNELS.resumeFocusSession),
+  editFocusSession: (edit) => ipcRenderer.invoke(IPC_CHANNELS.editFocusSession, edit),
+  setFocusBarPresentation: (presentation) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setFocusBarPresentation, presentation),
+  setFocusShowTimerBar: (showTimerBar) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setFocusShowTimerBar, showTimerBar),
+  setFocusProgressColor: (progressColor) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setFocusProgressColor, progressColor),
+  focusFocusBar: () => ipcRenderer.invoke(IPC_CHANNELS.focusFocusBar),
+  onOpenFocusEditor: (listener) => {
+    const handler = (): void => listener();
+    ipcRenderer.on(IPC_CHANNELS.openFocusEditor, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.openFocusEditor, handler);
+  },
+  previewFocusReminder: () => ipcRenderer.invoke(IPC_CHANNELS.previewFocusReminder),
+  setFocusExperience: (experience) => ipcRenderer.invoke(IPC_CHANNELS.setFocusExperience, experience),
+  setFocusEdge: (patch) => ipcRenderer.invoke(IPC_CHANNELS.setFocusEdge, patch),
+  restoreFocusSystemColors: () => ipcRenderer.invoke(IPC_CHANNELS.restoreFocusSystemColors),
+  requestScreenCaptureAccess: () => ipcRenderer.invoke(IPC_CHANNELS.requestScreenCapture),
+  refreshScreenCaptureAccess: () => ipcRenderer.invoke(IPC_CHANNELS.refreshScreenCapture),
+  openScreenCaptureSettings: () => ipcRenderer.invoke(IPC_CHANNELS.openScreenCaptureSettings),
+  onFocusState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: FocusViewState): void => {
+      listener(state);
+    };
+    ipcRenderer.on(IPC_CHANNELS.focusState, handler);
+    return () => ipcRenderer.removeListener(IPC_CHANNELS.focusState, handler);
+  },
+  getActivityDay: (date) => ipcRenderer.invoke(IPC_CHANNELS.getActivityDay, date)
 };
 
 contextBridge.exposeInMainWorld("openHistory", bridge);

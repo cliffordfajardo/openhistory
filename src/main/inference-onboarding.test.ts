@@ -2,9 +2,40 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertInferenceOnboardingAvailability,
-  normalizeInferenceOnboardingSelection
+  normalizeInferenceOnboardingSelection,
+  normalizeLocalOnlyOnboardingSelection
 } from "./inference-onboarding";
 import { appleInferenceAvailabilityGuidance } from "../shared/inference";
+
+test("completes local-only setup with private defaults and no provider or key", () => {
+  assert.deepEqual(normalizeLocalOnlyOnboardingSelection(undefined), {
+    captureEmailActivity: false,
+    captureMessagingActivity: false,
+    appPresentationMode: "dock"
+  });
+  assert.deepEqual(normalizeLocalOnlyOnboardingSelection({
+    captureMessagingActivity: true,
+    appPresentationMode: "menuBar"
+  }), {
+    captureEmailActivity: false,
+    captureMessagingActivity: true,
+    appPresentationMode: "menuBar"
+  });
+});
+
+test("rejects local-only setup payloads that smuggle provider settings or bad values", () => {
+  for (const value of [
+    null,
+    "local",
+    [],
+    { provider: "openai" },
+    { apiKey: "secret" },
+    { captureEmailActivity: "yes" },
+    { appPresentationMode: "floating" }
+  ]) {
+    assert.throws(() => normalizeLocalOnlyOnboardingSelection(value), Error, JSON.stringify(value));
+  }
+});
 
 test("accepts the supported Apple model without a credential", () => {
   assert.deepEqual(normalizeInferenceOnboardingSelection({

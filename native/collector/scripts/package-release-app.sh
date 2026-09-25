@@ -24,6 +24,7 @@ output_root=".todesktop/native/${requested_arch}"
 app_directory="${output_root}/OpenHistory Collector.app"
 macos_directory="${app_directory}/Contents/MacOS"
 swift_scratch_root=".todesktop/native/.swiftpm/release"
+swift_build_system="${OPENHISTORY_SWIFT_BUILD_SYSTEM:-native}"
 
 build_architecture() {
   swift_arch="$1"
@@ -33,12 +34,14 @@ build_architecture() {
   mkdir -p "${swift_scratch_path}"
   swift build \
     --disable-sandbox \
+    --build-system "${swift_build_system}" \
     --package-path native/collector \
     --scratch-path "${swift_scratch_path}" \
     --configuration release \
     --arch "${swift_arch}" >&2
   swift build \
     --disable-sandbox \
+    --build-system "${swift_build_system}" \
     --package-path native/collector \
     --scratch-path "${swift_scratch_path}" \
     --configuration release \

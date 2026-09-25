@@ -95,6 +95,14 @@ public enum SemanticProtectionPolicy {
         "com.operasoftware.Opera"
     ]
 
+    public static func isBrowserApplication(bundleIdentifier: String) -> Bool {
+        if browserApplications.contains(bundleIdentifier) { return true }
+        let prefix = "com.google.Chrome.app."
+        guard bundleIdentifier.hasPrefix(prefix) else { return false }
+        let appID = bundleIdentifier.utf8.dropFirst(prefix.utf8.count)
+        return appID.count == 32 && appID.allSatisfy { (97...112).contains($0) }
+    }
+
     public static func protectsApplication(
         bundleIdentifier: String,
         captureEmailActivity: Bool = false,
@@ -141,6 +149,17 @@ public enum SemanticProtectionPolicy {
             (domainMatches(domain, "linkedin.com") && path.hasPrefix("/messaging")) ||
             (domainMatches(domain, "instagram.com") && path.hasPrefix("/direct")) ||
             (domainMatches(domain, "reddit.com") && path.hasPrefix("/message"))
+    }
+
+    public static func protectsFocusBrowserObservation(
+        _ observation: BrowserObservation,
+        captureMessagingActivity: Bool = false
+    ) -> Bool {
+        protectsBrowserObservation(
+            observation,
+            captureEmailActivity: true,
+            captureMessagingActivity: captureMessagingActivity
+        )
     }
 
     private static func domainMatches(_ domain: String, _ protectedDomain: String) -> Bool {

@@ -2,6 +2,36 @@
 
 Last updated: August 16, 2026
 
+> **OpenHistory Focus differences.** This fork runs as a separate app with its own data folder
+> (`~/Library/Application Support/OpenHistory Focus/activity-data`) and never reads upstream
+> OpenHistory data, keys or consents. By default it records only app switches, window titles and
+> browser addresses; email and messaging stay excluded at first run; summaries start off and setup
+> can finish with **Keep everything local — summaries off**. During a Focus session the existing
+> collector also produces short-lived foreground observations (browser host or "unknown") that are
+> never written to disk. Webmail hostnames can trigger configured Focus reminders even when
+> email recording is off; this does not add email URLs, titles or content to activity history.
+> Private/incognito windows remain excluded when detected. The optional **Grayscale window** and **Grayscale screen** reminder
+> styles (off by default; the amber style needs no screen access) ask for macOS Screen Recording
+> and, only while a reminder or preview is showing, capture the display it appears on to redraw
+> the distracting window (Grayscale window, which also reads that window's on-screen bounds) or
+> the whole display (Grayscale screen) in gray. Those
+> frames stay transient in memory and GPU buffers: they are never saved, logged, analyzed, sent
+> to a model or uploaded, and are released when the reminder hides. Activity capture itself still
+> takes no screenshots. The optional **System** grayscale captures nothing: it switches macOS
+> Color Filters through a private system setting and keeps only your earlier filter settings in a
+> small restore journal outside the data folder until they are restored. While a session runs, an
+> optional floating bar shows only what you already entered — the goal, the countdown and its
+> controls — and reads nothing from other apps; where you drag it is remembered as two screen
+> coordinates in the same private folder. Clicks on that bar and on the reminder card are excluded
+> from click recording, so app controls are never logged as activity in another app. An optional
+> timer bar draws only how much of the session is left, across the menu region of every display; it
+> is sent no goal, no intention and nothing about the browser, it takes no clicks, and it records
+> nothing. Goals, Focus preferences and one running session — its clock, its intention and a copy
+> of the goal it started with, so it survives a quit — are stored in the same private folder, are
+> removed by "Delete all local data", and are not sent to models or exposed through MCP. The
+> upstream auto-updater is disabled. See [docs/FOCUS.md](docs/FOCUS.md). Where this note and the
+> policy below differ, this note describes the fork.
+
 OpenHistory is a local-first macOS application. This policy describes the data handled by the open-source app and the choices available to you. A distributor may publish additional terms for downloads or update infrastructure, but those terms must not weaken the in-app controls described here.
 
 ## Activity OpenHistory can collect

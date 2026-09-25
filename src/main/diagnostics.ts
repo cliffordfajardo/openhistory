@@ -13,6 +13,7 @@ export function sanitizedDiagnostics(
   state: BootstrapState,
   environment: DiagnosticEnvironment
 ): object {
+  const focusSession = state.focus?.session;
   return {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -34,7 +35,23 @@ export function sanitizedDiagnostics(
         emailActivity: state.settings.captureEmailActivity,
         messagingActivity: state.settings.captureMessagingActivity
       },
-      excludedApplicationCount: state.settings.excludedBundleIdentifiers.length
+      excludedApplicationCount: state.settings.excludedBundleIdentifiers.length,
+      capturePaused: state.settings.capturePaused === true
+    },
+    focus: {
+      goalCount: state.focus?.goals.length ?? 0,
+      distractingSiteCount: state.focus?.preferences.domains.length ?? 0,
+      sessionActive: focusSession?.status === "active",
+      sessionPaused: focusSession?.status === "active" && focusSession.endsAt === null,
+      detection: state.focus?.detection ?? "unknown",
+      reminderStyle: state.focus?.preferences.experience ?? "amber",
+      sessionDisplay: state.focus?.preferences.barPresentation ?? "floating",
+      /** Whether a place was saved for the bar, never where it is. */
+      barPositionSaved: Boolean(state.focus?.barPosition),
+      screenCaptureAccess: state.focus?.screenCapture?.access ?? "unsupported",
+      lastEffect: state.focus?.effect
+        ? { status: state.focus.effect.status, fallbackReason: state.focus.effect.fallbackReason }
+        : null
     },
     inference: {
       enabled: state.inference.settings.enabled,

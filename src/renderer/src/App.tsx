@@ -29,9 +29,14 @@ import {
 } from "@shared/inference";
 import { linkifyHistoryText } from "@shared/history-links";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ActivityDayTimeline } from "./focus/ActivityDayView";
+import { FocusPage } from "./focus/FocusPage";
+import { GoalsPage } from "./focus/GoalsPage";
 
-const pages = ["History", "Chat", "Settings"] as const;
+const pages = ["Focus", "Goals", "History", "Chat", "Settings"] as const;
 type Page = (typeof pages)[number];
+type TimelineView = "activity" | "summaries";
+const TIMELINE_VIEW_STORAGE_KEY = "openhistory:timeline-view";
 type SetAppState = React.Dispatch<React.SetStateAction<BootstrapState | undefined>>;
 type ChatSessionState = {
   turns: HistoryChatTurn[];
@@ -43,6 +48,8 @@ type SetChatSessionState = React.Dispatch<React.SetStateAction<ChatSessionState>
 const PAGE_STORAGE_KEY = "openhistory:page";
 const APPLICATION_PREVIEW_LIMIT = 5;
 const pageLabels: Record<Page, string> = {
+  Focus: "Focus",
+  Goals: "Goals",
   History: "Timeline",
   Chat: "Chat",
   Settings: "Settings"
@@ -52,9 +59,10 @@ export function App(): React.JSX.Element {
   const [state, setState] = useState<BootstrapState>();
   const [page, setPage] = useState<Page>(() => {
     const saved = sessionStorage.getItem(PAGE_STORAGE_KEY);
-    return pages.find((candidate) => candidate === saved) ?? "History";
+    return pages.find((candidate) => candidate === saved) ?? "Focus";
   });
   const [apiKeyFocusRequest, setApiKeyFocusRequest] = useState(0);
+  const [focusEditRequest, setFocusEditRequest] = useState(0);
   const [startupError, setStartupError] = useState<string>();
   const [liveActivityOpen, setLiveActivityOpen] = useState(false);
   const [chatSession, setChatSession] = useState<ChatSessionState>({
@@ -105,6 +113,13 @@ export function App(): React.JSX.Element {
       window.openHistory.onBootstrapState(setState),
       window.openHistory.onOpenSettings(() => {
         selectPage("Settings");
+      }),
+      window.openHistory.onOpenFocusEditor(() => {
+        setFocusEditRequest((current) => current + 1);
+        selectPage("Focus");
+      }),
+      window.openHistory.onFocusState((focus) => {
+        setState((current) => current ? { ...current, focus } : current);
       })
     ];
     return () => unsubscribe.forEach((remove) => remove());
@@ -219,8 +234,22 @@ export function App(): React.JSX.Element {
                 appleAvailability={state.inference.appleAvailability}
                 setState={setState}
               />
+            ) : page === "Focus" ? (
+              <FocusPage
+                editRequest={focusEditRequest}
+                onManageGoals={() => selectPage("Goals")}
+                onOpenSettings={() => selectPage("Settings")}
+                setState={setState}
+                state={state}
+              />
+            ) : page === "Goals" ? (
+              <GoalsPage
+                focus={state.focus}
+                onStartFocus={() => selectPage("Focus")}
+                setState={setState}
+              />
             ) : page === "History" ? (
-              <HistoryPage
+              <TimelinePage
                 onAddApiKey={openApiKeySettings}
                 state={state}
                 setState={setState}
@@ -649,11 +678,12 @@ function InferenceOnboarding({
   setState: SetAppState;
 }): React.JSX.Element {
   const [provider, setProvider] = useState<InferenceProvider>();
+  const [localOnly, setLocalOnly] = useState(false);
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [step, setStep] = useState<"model" | "capture" | "presentation">("model");
-  const [captureEmailActivity, setCaptureEmailActivity] = useState(true);
-  const [captureMessagingActivity, setCaptureMessagingActivity] = useState(true);
+  const [captureEmailActivity, setCaptureEmailActivity] = useState(false);
+  const [captureMessagingActivity, setCaptureMessagingActivity] = useState(false);
   const [presentationMode, setPresentationMode] = useState<AppPresentationMode>("dock");
   const [saving, setSaving] = useState(false);
   const [checkingAppleAvailability, setCheckingAppleAvailability] = useState(false);
@@ -661,7 +691,17 @@ function InferenceOnboarding({
   const cloudProvider = provider && isCloudInferenceProvider(provider) ? provider : undefined;
   const appleUnavailable = provider === "apple" && !appleAvailability.available;
 
+  function chooseLocalOnly(): void {
+    setLocalOnly(true);
+    setProvider(undefined);
+    setModel("");
+    setApiKey("");
+    setError(undefined);
+    setStep("capture");
+  }
+
   function chooseProvider(next: InferenceProvider): void {
+    setLocalOnly(false);
     setProvider(next);
     setModel(DEFAULT_INFERENCE_MODELS[next]);
     setApiKey("");
@@ -701,6 +741,22 @@ function InferenceOnboarding({
   }
 
   async function completeSetup(): Promise<void> {
+    if (localOnly) {
+      setSaving(true);
+      setError(undefined);
+      try {
+        setState(await window.openHistory.completeLocalOnlyOnboarding({
+          captureEmailActivity,
+          captureMessagingActivity,
+          appPresentationMode: presentationMode
+        }));
+      } catch {
+        setError("OpenHistory Focus could not finish setup. Try again.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     if (!provider || !model || appleUnavailable || (cloudProvider && !apiKey.trim())) return;
     setSaving(true);
     setError(undefined);
@@ -720,13 +776,14 @@ function InferenceOnboarding({
     }
   }
 
-  if (step === "capture" && provider) {
+  if (step === "capture" && (provider || localOnly)) {
     return (
       <CapturePreferencesOnboarding
         accessibilityTrusted={accessibilityTrusted}
         error={error}
         onBack={() => {
           setError(undefined);
+          setLocalOnly(false);
           setStep("model");
         }}
         initialEmailActivity={captureEmailActivity}
@@ -758,9 +815,26 @@ function InferenceOnboarding({
   return (
     <section className="model-onboarding" aria-labelledby="model-onboarding-title">
       <div className="model-onboarding-heading">
-        <h2 id="model-onboarding-title">Choose how your timeline is written.</h2>
-        <p>OpenHistory needs a model to turn captured activity into readable history, hour summaries, and daily summaries. You can change this later in Settings.</p>
+        <h2 id="model-onboarding-title">Do you want written summaries?</h2>
+        <p>Focus, Goals and the Activity timeline work fully on this Mac without a model. Summaries are optional rollups written by a model you choose. You can change this later in Settings.</p>
       </div>
+
+      <button
+        className="local-only-choice card"
+        onClick={chooseLocalOnly}
+        type="button"
+      >
+        <span className="local-only-choice-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><rect x="4.5" y="8.5" width="11" height="8" rx="1.8" /><path d="M7 8.5V6.5a3 3 0 0 1 6 0v2" /></svg>
+        </span>
+        <span className="local-only-choice-copy">
+          <strong>Keep everything local — summaries off</strong>
+          <small>No model, no API key, no cloud consent. Activity stays in this Mac’s private data folder.</small>
+        </span>
+        <span className="local-only-choice-arrow" aria-hidden="true">→</span>
+      </button>
+
+      <div className="model-onboarding-divider" role="presentation"><span>or choose a summary model</span></div>
 
       <div className="provider-choice-list" role="radiogroup" aria-label="Summary provider">
         {INFERENCE_PROVIDERS.map((candidate) => {
@@ -930,7 +1004,7 @@ function CapturePreferencesOnboarding({
   initialMessagingActivity: boolean;
   onBack: () => void;
   onContinue: (captureEmailActivity: boolean, captureMessagingActivity: boolean) => void;
-  provider: InferenceProvider;
+  provider?: InferenceProvider;
   saving: boolean;
   setState: SetAppState;
 }): React.JSX.Element {
@@ -939,7 +1013,7 @@ function CapturePreferencesOnboarding({
   const [permissionRequested, setPermissionRequested] = useState(false);
   const [checkingAccessibility, setCheckingAccessibility] = useState(false);
   const [accessibilityError, setAccessibilityError] = useState<string>();
-  const cloudProvider = isCloudInferenceProvider(provider) ? provider : undefined;
+  const cloudProvider = provider && isCloudInferenceProvider(provider) ? provider : undefined;
   const hasSelection = captureEmailActivity || captureMessagingActivity;
 
   useEffect(() => {
@@ -996,12 +1070,12 @@ function CapturePreferencesOnboarding({
     <section className="model-onboarding capture-onboarding" aria-labelledby="capture-onboarding-title">
       <button className="onboarding-back-button" disabled={saving} onClick={onBack} type="button">
         <svg aria-hidden="true" viewBox="0 0 16 16"><path d="m9.75 3.25-4.5 4.75 4.5 4.75" /></svg>
-        Back to model
+        Back
       </button>
       <div className="model-onboarding-heading">
         <span className="eyebrow">Capture setup</span>
-        <h2 id="capture-onboarding-title">Choose what OpenHistory can capture.</h2>
-        <p>Accessibility enables rich activity capture. Email and messages are optional and can stay excluded.</p>
+        <h2 id="capture-onboarding-title">Choose what OpenHistory Focus can capture.</h2>
+        <p>By default only app switches, window titles and browser addresses are recorded. Text, clicks, documents and interface snapshots stay off unless you turn them on in Settings.</p>
       </div>
 
       <div className="capture-onboarding-card card">
@@ -1021,8 +1095,8 @@ function CapturePreferencesOnboarding({
             <span>{accessibilityTrusted
               ? "Rich activity capture is ready."
               : permissionRequested
-                ? "Turn on OpenHistory in System Settings, then return here."
-                : "Needed to understand controls, text edits, URLs, and document context. OpenHistory never records screen video."}</span>
+                ? "Turn on OpenHistory Focus in System Settings → Privacy & Security → Accessibility, then return here."
+                : "Needed to read window titles and the front browser tab’s address for Focus and the timeline. OpenHistory Focus never records the screen."}</span>
           </span>
           {accessibilityTrusted ? null : permissionRequested ? (
             <div className="capture-accessibility-actions">
@@ -1058,7 +1132,7 @@ function CapturePreferencesOnboarding({
         {accessibilityError ? <ErrorMessage>{accessibilityError}</ErrorMessage> : null}
         <div className="capture-onboarding-section-heading">
           <strong>Optional activity</strong>
-          <span>Selected by default</span>
+          <span>Off by default</span>
         </div>
         <div className="capture-onboarding-options">
           <label className={`capture-onboarding-option${captureEmailActivity ? " selected" : ""}`}>
@@ -1228,11 +1302,12 @@ function PrivacyOnboarding({ onAccept }: { onAccept: () => Promise<void> }): Rea
       <div>
         <span className="eyebrow">Before capture begins</span>
         <h2 id="privacy-onboarding-title">Your work history stays under your control.</h2>
-        <p>OpenHistory observes the apps, clicks, and text changes you permit.<br />It never takes screenshots or tracks your camera or microphone.</p>
+        <p>OpenHistory Focus observes which app is in front, its window title, and the front browser tab’s address.<br />Activity capture never takes screenshots or tracks your camera or microphone. The optional grayscale reminder, off by default, reads the screen only while it shows and never saves it.</p>
       </div>
       <ul>
-        <li><strong>Stored locally.</strong> Raw activity and generated history live in OpenHistory’s private data directory on this Mac.</li>
-        <li><strong>On-device is distinct from cloud.</strong> Apple’s experimental model stays on this Mac. OpenAI, Anthropic, and Kimi receive selected activity evidence only after a separate confirmation.</li>
+        <li><strong>Stored locally.</strong> Activity, goals and any summaries live in a private data folder on this Mac, separate from upstream OpenHistory.</li>
+        <li><strong>Nudges, not blocking.</strong> During a Focus session, a listed site in front brings up a gentle reminder. Webmail can trigger a reminder from its site name even when email activity is excluded from history. Detected private windows and protected pages are excluded. Private-window detection depends on the browser’s accessibility information.</li>
+        <li><strong>Summaries are optional.</strong> You can keep everything local with summaries off. Cloud models receive activity only after a separate confirmation.</li>
         <li><strong>Visible and reversible.</strong> Pause capture in the header, exclude apps in Settings, inspect the data folder, or permanently delete all local data.</li>
       </ul>
       <button
@@ -1246,6 +1321,53 @@ function PrivacyOnboarding({ onAccept }: { onAccept: () => Promise<void> }): Rea
         {accepting ? "Continuing…" : "Allow and continue"}
       </button>
       <p className="privacy-fine-print">You can change every capture category in Settings at any time.</p>
+    </section>
+  );
+}
+
+function TimelinePage({
+  onAddApiKey,
+  state,
+  setState
+}: {
+  onAddApiKey: () => void;
+  state: BootstrapState;
+  setState: SetAppState;
+}): React.JSX.Element {
+  const [view, setView] = useState<TimelineView>(() =>
+    sessionStorage.getItem(TIMELINE_VIEW_STORAGE_KEY) === "summaries" ? "summaries" : "activity"
+  );
+
+  function choose(next: TimelineView): void {
+    sessionStorage.setItem(TIMELINE_VIEW_STORAGE_KEY, next);
+    setView(next);
+  }
+
+  return (
+    <section className="page-stack timeline-page">
+      <div className="timeline-view-toggle" role="tablist" aria-label="Timeline view">
+        <button
+          aria-selected={view === "activity"}
+          className={view === "activity" ? "active" : ""}
+          onClick={() => choose("activity")}
+          role="tab"
+          type="button"
+        >
+          Activity
+        </button>
+        <button
+          aria-selected={view === "summaries"}
+          className={view === "summaries" ? "active" : ""}
+          onClick={() => choose("summaries")}
+          role="tab"
+          type="button"
+        >
+          Summaries
+        </button>
+      </div>
+      {view === "activity"
+        ? <ActivityDayTimeline />
+        : <HistoryPage onAddApiKey={onAddApiKey} setState={setState} state={state} />}
     </section>
   );
 }
@@ -1321,10 +1443,10 @@ function HistoryPage({
       ) : null}
 
       {days.length === 0 ? (
-        <EmptyState title="No timeline yet">
+        <EmptyState title="No summaries yet">
           {state.inference.settings.enabled
-            ? "Use your Mac for a few minutes. History updates automatically."
-            : "Activity remains local. Turn on automatic summaries in Settings to build the timeline."}
+            ? "Use your Mac for a few minutes. Summaries update automatically."
+            : "Summaries are off, so nothing leaves this Mac. The Activity view shows your recorded day without a model. Turn on summaries in Settings if you want written rollups."}
         </EmptyState>
       ) : (
         <div className="timeline-list rollup-list">
@@ -1906,7 +2028,7 @@ function PermissionsPage({
           <p className="protected-note">
             {state.settings.captureEmailActivity
               ? "Email apps and webmail can be included. "
-              : "Email apps and webmail are excluded. "}
+              : "Email apps and webmail are excluded from activity history. Focus can still recognize a listed webmail site by its name alone. "}
             {state.settings.captureMessagingActivity
               ? "Messages, including iMessage, and recognized chat apps and websites can be included. "
               : "Messages, including iMessage, and recognized chat apps and websites are excluded. "}

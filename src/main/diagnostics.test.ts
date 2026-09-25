@@ -47,6 +47,26 @@ test("diagnostics omit activity content, local paths, errors, and credentials", 
       endpoint: secret,
       connections: [{ id: secret, name: secret, createdAt: new Date().toISOString(), accessCount: 1 }],
       projection: { timelineCount: 1, dailyRollupCount: 1 }
+    },
+    focus: {
+      goals: [{ id: "goal-00000000", title: secret, why: secret, currentFocus: secret }],
+      selectedGoalId: "goal-00000000",
+      preferences: { domains: [`${secret.toLowerCase()}.example`], durationMinutes: 25 },
+      session: {
+        status: "active",
+        id: "session-1",
+        goal: { id: "goal-00000000", title: secret, why: secret, currentFocus: secret },
+        intention: secret,
+        domains: [`${secret.toLowerCase()}.example`],
+        startedAt: new Date().toISOString(),
+        endsAt: new Date().toISOString(),
+        snoozedUntil: null
+      },
+      detection: "ready",
+      foreground: "listed_site",
+      reminderVisible: false,
+      lastReminderAt: null,
+      recoveredFromInvalidFile: false
     }
   } as unknown as BootstrapState;
 
@@ -58,7 +78,14 @@ test("diagnostics omit activity content, local paths, errors, and credentials", 
     architecture: "arm64",
     osRelease: "26.0"
   }));
-  assert.doesNotMatch(output, new RegExp(secret));
+  assert.doesNotMatch(output, new RegExp(secret, "i"));
   assert.match(output, /"contentIncluded":false/);
+  assert.match(output, /"goalCount":1/);
+  assert.match(output, /"distractingSiteCount":1/);
+  assert.match(output, /"reminderStyle":"amber"/);
+  assert.match(output, /"sessionPaused":false/);
+  assert.match(output, /"sessionDisplay":"floating"/);
+  assert.match(output, /"barPositionSaved":false/);
+  assert.match(output, /"screenCaptureAccess":"unsupported"/);
   assert.match(output, /"timelineCount":1/);
 });
